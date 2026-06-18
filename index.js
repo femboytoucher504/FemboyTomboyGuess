@@ -3,6 +3,7 @@
     
     const Commands = metro.findByProps("BUILT_IN_COMMANDS");
     const MessageActions = metro.findByProps("sendMessage", "editMessage");
+    const BotMessage = metro.findByProps("sendBotMessage");
     
     // Mix of subreddits for both human and anime content
     const femboySources = ["femboy", "traditionalfemboys", "femboymemes"];
@@ -14,15 +15,15 @@
         try {
             const res = await fetch("https://meme-api.com/gimme/" + randomSub);
             const data = await res.json();
-            return data.url;
+            return data.url || "Error: No image URL found.";
         } catch (e) {
-            return "https://via.placeholder.com/400?text=Fetch+Failed";
+            return "Fetch failed: " + e.message;
         }
     }
 
     const myCommands = [
         {
-            id: "guess-game-1",
+            id: "-102", // MUST be a negative number!
             untranslatedName: "femboy",
             displayName: "femboy",
             untranslatedDescription: "Sends a random femboy picture",
@@ -32,15 +33,19 @@
             applicationId: "-1",
             options: [],
             execute: async function(args, ctx) {
-                const url = await fetchImage("femboy");
-                if (MessageActions && ctx && ctx.channel) {
-                    MessageActions.sendMessage(ctx.channel.id, { content: url });
+                try {
+                    const url = await fetchImage("femboy");
+                    if (MessageActions) {
+                        MessageActions.sendMessage(ctx.channel.id, { content: url });
+                    }
+                } catch (err) {
+                    if (BotMessage) BotMessage.sendBotMessage(ctx.channel.id, "❌ Error: " + err.message);
                 }
                 return {};
             }
         },
         {
-            id: "guess-game-2",
+            id: "-103", // MUST be a negative number!
             untranslatedName: "tomboy",
             displayName: "tomboy",
             untranslatedDescription: "Sends a random tomboy picture",
@@ -50,15 +55,19 @@
             applicationId: "-1",
             options: [],
             execute: async function(args, ctx) {
-                const url = await fetchImage("tomboy");
-                if (MessageActions && ctx && ctx.channel) {
-                    MessageActions.sendMessage(ctx.channel.id, { content: url });
+                try {
+                    const url = await fetchImage("tomboy");
+                    if (MessageActions) {
+                        MessageActions.sendMessage(ctx.channel.id, { content: url });
+                    }
+                } catch (err) {
+                    if (BotMessage) BotMessage.sendBotMessage(ctx.channel.id, "❌ Error: " + err.message);
                 }
                 return {};
             }
         },
         {
-            id: "guess-game-3",
+            id: "-104", // MUST be a negative number!
             untranslatedName: "guess",
             displayName: "guess",
             untranslatedDescription: "Tomboy or Femboy? Play the guessing game.",
@@ -68,13 +77,17 @@
             applicationId: "-1",
             options: [],
             execute: async function(args, ctx) {
-                const isTomboy = Math.random() > 0.5;
-                const type = isTomboy ? "tomboy" : "femboy";
-                const url = await fetchImage(type);
-                if (MessageActions && ctx && ctx.channel) {
-                    MessageActions.sendMessage(ctx.channel.id, { 
-                        content: url + "\n\n**Answer:** ||It's a " + type + "!||" 
-                    });
+                try {
+                    const isTomboy = Math.random() > 0.5;
+                    const type = isTomboy ? "tomboy" : "femboy";
+                    const url = await fetchImage(type);
+                    if (MessageActions) {
+                        MessageActions.sendMessage(ctx.channel.id, { 
+                            content: url + "\n\n**Answer:** ||It's a " + type + "!||" 
+                        });
+                    }
+                } catch (err) {
+                    if (BotMessage) BotMessage.sendBotMessage(ctx.channel.id, "❌ Error: " + err.message);
                 }
                 return {};
             }
@@ -86,7 +99,7 @@
         myCommands.forEach(cmd => Commands.BUILT_IN_COMMANDS.push(cmd));
     }
 
-    // Cleanup logic so reloading the plugin doesn't duplicate slash commands
+    // Cleanup logic
     exports.onUnload = () => {
         if (Commands && Commands.BUILT_IN_COMMANDS) {
             myCommands.forEach(cmd => {
