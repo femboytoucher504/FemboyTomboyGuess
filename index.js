@@ -4,93 +4,107 @@
     const Commands = metro.findByProps("BUILT_IN_COMMANDS");
     const MessageActions = metro.findByProps("sendMessage");
     
-    const femboySources = ["femboy", "traditionalfemboys", "femboymemes"];
-    const tomboySources = ["tomboy", "AnimeTomboys"];
-    
-    async function fetchImage(type) {
-        const sources = type === "femboy" ? femboySources : tomboySources;
-        const randomSub = sources[Math.floor(Math.random() * sources.length)];
-        try {
-            const res = await fetch("https://meme-api.com/gimme/" + randomSub);
-            const data = await res.json();
-            return data.url || "Error: No image URL found.";
-        } catch (e) {
-            return "Fetch failed: " + e.message;
+    // --- SOURCES CONFIGURATION ---
+    const sources = {
+        sfw: {
+            femboy: ["femboymemes", "femboysfw"],
+            tomboy: ["tomboy", "AnimeTomboys"]
+        },
+        nsfw: {
+            femboy: ["femboy", "traditionalfemboys"],
+            tomboy: ["tomboygf"]
         }
+    };
+
+    const isImage = (url) => /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
+    let activeGuesses = {};
+
+    async function fetchImage(type, category) {
+        const subredditList = sources[category][type];
+        for (let i = 0; i < 5; i++) {
+            const randomSub = subredditList[Math.floor(Math.random() * subredditList.length)];
+            try {
+                const res = await fetch("https://meme-api.com/gimme/" + randomSub);
+                const data = await res.json();
+                if (data && data.url && isImage(data.url)) return data.url;
+            } catch (e) { continue; }
+        }
+        return null;
     }
 
     const myCommands = [
-        {
-            id: "-102",
-            untranslatedName: "femboy",
-            displayName: "femboy",
-            untranslatedDescription: "Sends a random femboy picture",
-            displayDescription: "Sends a random femboy picture",
+        // SFW Commands (/femboy, /tomboy)
+        ...["femboy", "tomboy"].map((type, i) => ({
+            id: "-20" + i,
+            untranslatedName: type,
+            displayName: type,
+            untranslatedDescription: "Send a SFW " + type + " picture",
+            displayDescription: "Send a SFW " + type + " picture",
             type: 1,
             inputType: 0,
             applicationId: "-1",
-            options: [],
-            execute: async function(args, ctx) {
-                const url = await fetchImage("femboy");
-                MessageActions.sendMessage(ctx.channel.id, { 
-                    content: url,
-                    tts: false,
-                    invalidEmojis: [],
-                    validNonShortcutEmojis: []
-                }, null, {
-                    nonce: Date.now().toString(),
-                    flags: 0
-                });
+            execute: async (args, ctx) => {
+                const url = await fetchImage(type, "sfw");
+                if (!url) return { content: "❌ Could not find an image." };
+                MessageActions.sendMessage(ctx.channel.id, { content: url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
                 return {};
             }
-        },
-        {
-            id: "-103",
-            untranslatedName: "tomboy",
-            displayName: "tomboy",
-            untranslatedDescription: "Sends a random tomboy picture",
-            displayDescription: "Sends a random tomboy picture",
+        })),
+        // NSFW Commands (/nsfw_femboy, /nsfw_tomboy)
+        ...["femboy", "tomboy"].map((type, i) => ({
+            id: "-30" + i,
+            untranslatedName: "nsfw_" + type,
+            displayName: "nsfw_" + type,
+            untranslatedDescription: "Send a NSFW " + type + " picture",
+            displayDescription: "Send a NSFW " + type + " picture",
             type: 1,
             inputType: 0,
             applicationId: "-1",
-            options: [],
-            execute: async function(args, ctx) {
-                const url = await fetchImage("tomboy");
-                MessageActions.sendMessage(ctx.channel.id, { 
-                    content: url,
-                    tts: false,
-                    invalidEmojis: [],
-                    validNonShortcutEmojis: []
-                }, null, {
-                    nonce: Date.now().toString(),
-                    flags: 0
-                });
+            execute: async (args, ctx) => {
+                const url = await fetchImage(type, "nsfw");
+                if (!url) return { content: "❌ Could not find an image." };
+                MessageActions.sendMessage(ctx.channel.id, { content: url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
                 return {};
             }
-        },
+        })),
+        // Guess Game
         {
-            id: "-104",
+            id: "-401",
             untranslatedName: "guess",
             displayName: "guess",
-            untranslatedDescription: "Tomboy or Femboy? Play the guessing game.",
-            displayDescription: "Tomboy or Femboy? Play the guessing game.",
+            untranslatedDescription: "Guess the character!",
+            displayDescription: "Guess the character!",
             type: 1,
             inputType: 0,
             applicationId: "-1",
-            options: [],
-            execute: async function(args, ctx) {
+            execute: async (args, ctx) => {
                 const isTomboy = Math.random() > 0.5;
                 const type = isTomboy ? "tomboy" : "femboy";
-                const url = await fetchImage(type);
-                MessageActions.sendMessage(ctx.channel.id, { 
-                    content: url + "\n\n**Answer:** ||It's a " + type + "!||",
-                    tts: false,
-                    invalidEmojis: [],
-                    validNonShortcutEmojis: []
-                }, null, {
-                    nonce: Date.now().toString(),
-                    flags: 0
-                });
+                const url = await fetchImage(type, "sfw");
+                if (!url) return { content: "❌ Could not find an image." };
+                activeGuesses[ctx.channel.id] = type;
+                MessageActions.sendMessage(ctx.channel.id, { content: "📸 **Guess!** Reply with `/answer tomboy` or `/answer femboy`.\n\n" + url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
+                return {};
+            }
+        },
+        // Answer Command
+        {
+            id: "-402",
+            untranslatedName: "answer",
+            displayName: "answer",
+            untranslatedDescription: "Submit your guess",
+            displayDescription: "Submit your guess",
+            type: 1,
+            inputType: 0,
+            applicationId: "-1",
+            options: [{ name: "choice", displayName: "choice", type: 3, required: true, choices: [{name: "tomboy", value: "tomboy"}, {name: "femboy", value: "femboy"}] }],
+            execute: async (args, ctx) => {
+                const userAnswer = args[0].value;
+                const correctAnswer = activeGuesses[ctx.channel.id];
+                if (!correctAnswer) return { content: "No active game! Type `/guess` to start." };
+                const result = (userAnswer === correctAnswer) ? "✅ Correct!" : "❌ Wrong! It was " + correctAnswer + ".";
+                MessageActions.sendMessage(ctx.channel.id, { content: result, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
+                delete activeGuesses[ctx.channel.id];
                 return {};
             }
         }
@@ -111,4 +125,3 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro);
-m
