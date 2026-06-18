@@ -1,0 +1,10 @@
+{
+  "name": "FemboyTomboyGuess",
+  "version": "1.0.0",
+  "description": "A femboy, tomboy, and guessing game commands",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc"
+  }
+  "author": "Femboytoucher504",
+}
