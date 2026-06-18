@@ -1,9 +1,11 @@
 {
   "name": "Femboy Tomboy Guess",
   "description": "A plugin with femboy, tomboy, and guessing game commands",
-  "authors": ["femboytoucher504"],
+  "authors": [
+    {
+      "name": "femboytoucher504",
+      "id": "0"
+    }
+  ],
   "main": "index.ts",
-  "vendetta": {
-    "icon": "ic_image_24px"
-  }
 }
