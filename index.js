@@ -8,7 +8,6 @@ const ReactNative = findByProps("ScrollView", "TextInput", "Button", "Text", "Vi
 const MessageActions = findByProps("sendMessage");
 
 // 1. INITIALIZE STORAGE
-// This ensures your custom sources are saved across app restarts
 if (!storage.sources) {
     storage.sources = {
         sfw: { femboy: [], tomboy: [] },
@@ -16,7 +15,7 @@ if (!storage.sources) {
     };
 }
 
-// 2. FETCH MEDIA LOGIC (No async/await used to prevent engine crashes)
+// 2. FETCH MEDIA LOGIC
 function fetchMedia(type, cat, mediaType) {
     const defaultSources = {
         sfw: { femboy: ["femboymemes", "femboysfw"], tomboy: ["tomboy", "AnimeTomboys"] },
@@ -40,10 +39,8 @@ function fetchMedia(type, cat, mediaType) {
     if (randomSrc.indexOf("http") === 0) {
         return fetch(randomSrc).then(function(res) {
             const contentType = res.headers.get("content-type") || "";
-            // If the URL is a direct link to an image/video file
             if (contentType.indexOf("image/") !== -1 || contentType.indexOf("video/") !== -1) return randomSrc;
             
-            // If the URL is a JSON API, parse it and look for common image keys
             return res.json().then(function(data) {
                 const url = data.url || data.file || data.message || data.src || data.image;
                 return (url && filter(url)) ? url : null;
@@ -60,8 +57,8 @@ function fetchMedia(type, cat, mediaType) {
     }
 }
 
-// 3. SETTINGS UI
-export function settings() {
+// 3. SETTINGS UI VIEW
+function SettingsView() {
     const [cat, setCat] = React.useState("sfw");
     const [type, setType] = React.useState("femboy");
     const [input, setInput] = React.useState("");
@@ -88,26 +85,19 @@ export function settings() {
         React.createElement(ReactNative.Text, { style: { color: "#fff", fontSize: 18, fontWeight: "bold", marginBottom: 12 } }, 
             "Manage Sources"
         ),
-        
         React.createElement(ReactNative.Text, { style: { color: "#aaa", marginBottom: 12 } }, 
             "Add a subreddit name (e.g. 'femboymemes') OR a full web URL/API link (e.g. 'https://api.waifu.pics/sfw/waifu')."
         ),
-
-        // Category Toggle Buttons
         React.createElement(ReactNative.View, { style: { flexDirection: "row", marginBottom: 8 } },
             React.createElement(ReactNative.Button, { title: cat === "sfw" ? "[ SFW ]" : "SFW", onPress: function() { setCat("sfw"); } }),
             React.createElement(ReactNative.View, { style: { width: 10 } }),
             React.createElement(ReactNative.Button, { title: cat === "nsfw" ? "[ NSFW ]" : "NSFW", onPress: function() { setCat("nsfw"); } })
         ),
-
-        // Type Toggle Buttons
         React.createElement(ReactNative.View, { style: { flexDirection: "row", marginBottom: 16 } },
             React.createElement(ReactNative.Button, { title: type === "femboy" ? "[ Femboy ]" : "Femboy", onPress: function() { setType("femboy"); } }),
             React.createElement(ReactNative.View, { style: { width: 10 } }),
             React.createElement(ReactNative.Button, { title: type === "tomboy" ? "[ Tomboy ]" : "Tomboy", onPress: function() { setType("tomboy"); } })
         ),
-
-        // Input Field & Add Button
         React.createElement(ReactNative.TextInput, {
             style: { backgroundColor: "#222", color: "#fff", padding: 10, borderRadius: 6, marginBottom: 8 },
             placeholder: "Enter Subreddit or https:// link...",
@@ -116,16 +106,12 @@ export function settings() {
             onChangeText: setInput
         }),
         React.createElement(ReactNative.Button, { title: "Add Source", onPress: handleAdd }),
-
-        // Source List
         React.createElement(ReactNative.Text, { style: { color: "#fff", marginTop: 24, marginBottom: 8, fontWeight: "bold" } }, 
             "Custom Sources (" + cat.toUpperCase() + " " + type + "):"
         ),
-        
         currentSources.length === 0 
             ? React.createElement(ReactNative.Text, { style: { color: "#888", fontStyle: "italic" } }, "No custom sources added.") 
             : null,
-
         currentSources.map(function(src, i) {
             return React.createElement(ReactNative.View, { key: i, style: { flexDirection: "row", alignItems: "center", backgroundColor: "#111", padding: 8, borderRadius: 6, marginBottom: 6 } },
                 React.createElement(ReactNative.Text, { style: { color: "#fff", flex: 1, marginRight: 8 } }, src),
@@ -135,56 +121,59 @@ export function settings() {
     );
 }
 
-// 4. COMMAND REGISTRATION
+// 4. MODULE EXPORT & COMMAND REGISTRATION
+// This is the format Revenge actually expects to prevent crashes.
 let unregisterCommands = [];
 
-export function onLoad() {
-    ["sfw", "nsfw"].forEach(function(cat) {
-        ["femboy", "tomboy"].forEach(function(type) {
-            
-            // Image Command
-            unregisterCommands.push(registerCommand({
-                name: (cat === "nsfw" ? "nsfw_" : "") + type,
-                displayName: (cat === "nsfw" ? "nsfw_" : "") + type,
-                description: "Sends a " + cat.toUpperCase() + " " + type + " image.",
-                displayDescription: "Sends a " + cat.toUpperCase() + " " + type + " image.",
-                applicationId: "-1",
-                inputType: 1,
-                type: 1,
-                execute: function(args, ctx) {
-                    fetchMedia(type, cat, "image").then(function(url) {
-                        if (url && MessageActions) {
-                            MessageActions.sendMessage(ctx.channel.id, { content: url });
-                        }
-                    });
-                }
-            }));
+module.exports = {
+    settings: SettingsView,
+    onLoad: function() {
+        ["sfw", "nsfw"].forEach(function(cat) {
+            ["femboy", "tomboy"].forEach(function(type) {
+                
+                // Image Command
+                unregisterCommands.push(registerCommand({
+                    name: (cat === "nsfw" ? "nsfw_" : "") + type,
+                    displayName: (cat === "nsfw" ? "nsfw_" : "") + type,
+                    description: "Sends a " + cat.toUpperCase() + " " + type + " image.",
+                    displayDescription: "Sends a " + cat.toUpperCase() + " " + type + " image.",
+                    applicationId: "-1",
+                    inputType: 1,
+                    type: 1,
+                    execute: function(args, ctx) {
+                        fetchMedia(type, cat, "image").then(function(url) {
+                            if (url && MessageActions) {
+                                MessageActions.sendMessage(ctx.channel.id, { content: url });
+                            }
+                        });
+                    }
+                }));
 
-            // Video Command
-            unregisterCommands.push(registerCommand({
-                name: (cat === "nsfw" ? "nsfw_" : "") + type + "_video",
-                displayName: (cat === "nsfw" ? "nsfw_" : "") + type + "_video",
-                description: "Sends a " + cat.toUpperCase() + " " + type + " video.",
-                displayDescription: "Sends a " + cat.toUpperCase() + " " + type + " video.",
-                applicationId: "-1",
-                inputType: 1,
-                type: 1,
-                execute: function(args, ctx) {
-                    fetchMedia(type, cat, "video").then(function(url) {
-                        if (url && MessageActions) {
-                            MessageActions.sendMessage(ctx.channel.id, { content: url });
-                        }
-                    });
-                }
-            }));
+                // Video Command
+                unregisterCommands.push(registerCommand({
+                    name: (cat === "nsfw" ? "nsfw_" : "") + type + "_video",
+                    displayName: (cat === "nsfw" ? "nsfw_" : "") + type + "_video",
+                    description: "Sends a " + cat.toUpperCase() + " " + type + " video.",
+                    displayDescription: "Sends a " + cat.toUpperCase() + " " + type + " video.",
+                    applicationId: "-1",
+                    inputType: 1,
+                    type: 1,
+                    execute: function(args, ctx) {
+                        fetchMedia(type, cat, "video").then(function(url) {
+                            if (url && MessageActions) {
+                                MessageActions.sendMessage(ctx.channel.id, { content: url });
+                            }
+                        });
+                    }
+                }));
+            });
         });
-    });
-}
-
-export function onUnload() {
-    // Unregister all commands when the plugin is turned off
-    unregisterCommands.forEach(function(unregister) { 
-        unregister(); 
-    });
-    unregisterCommands = [];
-}
+    },
+    onUnload: function() {
+        unregisterCommands.forEach(function(unregister) { 
+            unregister(); 
+        });
+        unregisterCommands = [];
+    }
+};
+                                                     
