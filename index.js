@@ -2,12 +2,12 @@
     "use strict";
 
     // --- DISCORD INTERNALS ---
-    // If these aren't found, we return early to prevent the plugin from crashing on load
     const Commands = metro.findByProps("BUILT_IN_COMMANDS");
     const MessageActions = metro.findByProps("sendMessage");
     const React = metro.findByProps("createElement", "useState");
     const ReactNative = metro.findByProps("ScrollView", "TextInput", "Button");
 
+    // Defensive check to prevent crash if internals aren't ready
     if (!Commands || !MessageActions || !React || !ReactNative) {
         console.error("Plugin failed to initialize: Missing required Discord modules.");
         return; 
@@ -270,4 +270,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                        
+                                                                   
