@@ -16,7 +16,9 @@
         }
     };
 
-    const isImage = (url) => /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
+    // Allows images, gifs, and common video formats
+    const isValidMedia = (url) => /\.(jpg|jpeg|png|gif|webp|mp4|webm)$/i.test(url);
+    
     let activeGuesses = {};
 
     async function fetchImage(type, category) {
@@ -26,14 +28,14 @@
             try {
                 const res = await fetch("https://meme-api.com/gimme/" + randomSub);
                 const data = await res.json();
-                if (data && data.url && isImage(data.url)) return data.url;
+                if (data && data.url && isValidMedia(data.url)) return data.url;
             } catch (e) { continue; }
         }
         return null;
     }
 
     const myCommands = [
-        // SFW Commands (/femboy, /tomboy)
+        // SFW Commands
         ...["femboy", "tomboy"].map((type, i) => ({
             id: "-20" + i,
             untranslatedName: type,
@@ -46,11 +48,11 @@
             execute: async (args, ctx) => {
                 const url = await fetchImage(type, "sfw");
                 if (!url) return { content: "❌ Could not find an image." };
-                MessageActions.sendMessage(ctx.channel.id, { content: url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
+                if (MessageActions) MessageActions.sendMessage(ctx.channel.id, { content: url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
                 return {};
             }
         })),
-        // NSFW Commands (/nsfw_femboy, /nsfw_tomboy)
+        // NSFW Commands
         ...["femboy", "tomboy"].map((type, i) => ({
             id: "-30" + i,
             untranslatedName: "nsfw_" + type,
@@ -63,7 +65,7 @@
             execute: async (args, ctx) => {
                 const url = await fetchImage(type, "nsfw");
                 if (!url) return { content: "❌ Could not find an image." };
-                MessageActions.sendMessage(ctx.channel.id, { content: url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
+                if (MessageActions) MessageActions.sendMessage(ctx.channel.id, { content: url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
                 return {};
             }
         })),
@@ -83,7 +85,7 @@
                 const url = await fetchImage(type, "sfw");
                 if (!url) return { content: "❌ Could not find an image." };
                 activeGuesses[ctx.channel.id] = type;
-                MessageActions.sendMessage(ctx.channel.id, { content: "📸 **Guess!** Reply with `/answer tomboy` or `/answer femboy`.\n\n" + url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
+                if (MessageActions) MessageActions.sendMessage(ctx.channel.id, { content: "📸 **Guess!** Reply with `/answer tomboy` or `/answer femboy`.\n\n" + url, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
                 return {};
             }
         },
@@ -103,7 +105,7 @@
                 const correctAnswer = activeGuesses[ctx.channel.id];
                 if (!correctAnswer) return { content: "No active game! Type `/guess` to start." };
                 const result = (userAnswer === correctAnswer) ? "✅ Correct!" : "❌ Wrong! It was " + correctAnswer + ".";
-                MessageActions.sendMessage(ctx.channel.id, { content: result, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
+                if (MessageActions) MessageActions.sendMessage(ctx.channel.id, { content: result, tts: false }, null, { nonce: Date.now().toString(), flags: 0 });
                 delete activeGuesses[ctx.channel.id];
                 return {};
             }
@@ -125,3 +127,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro);
+
