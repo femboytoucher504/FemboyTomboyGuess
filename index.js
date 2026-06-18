@@ -2,6 +2,7 @@
     "use strict";
     
     const Commands = metro.findByProps("BUILT_IN_COMMANDS");
+    const MessageActions = metro.findByProps("sendMessage", "editMessage");
     
     // Mix of subreddits for both human and anime content
     const femboySources = ["femboy", "traditionalfemboys", "femboymemes"];
@@ -30,9 +31,12 @@
             inputType: 0,
             applicationId: "-1",
             options: [],
-            execute: async function() {
+            execute: async function(args, ctx) {
                 const url = await fetchImage("femboy");
-                return { content: url };
+                if (MessageActions && ctx && ctx.channel) {
+                    MessageActions.sendMessage(ctx.channel.id, { content: url });
+                }
+                return {};
             }
         },
         {
@@ -45,9 +49,12 @@
             inputType: 0,
             applicationId: "-1",
             options: [],
-            execute: async function() {
+            execute: async function(args, ctx) {
                 const url = await fetchImage("tomboy");
-                return { content: url };
+                if (MessageActions && ctx && ctx.channel) {
+                    MessageActions.sendMessage(ctx.channel.id, { content: url });
+                }
+                return {};
             }
         },
         {
@@ -60,12 +67,16 @@
             inputType: 0,
             applicationId: "-1",
             options: [],
-            execute: async function() {
+            execute: async function(args, ctx) {
                 const isTomboy = Math.random() > 0.5;
                 const type = isTomboy ? "tomboy" : "femboy";
                 const url = await fetchImage(type);
-                // Sends the image with the answer hidden behind standard Discord spoiler tags
-                return { content: url + "\n\n**Answer:** ||It's a " + type + "!||" };
+                if (MessageActions && ctx && ctx.channel) {
+                    MessageActions.sendMessage(ctx.channel.id, { 
+                        content: url + "\n\n**Answer:** ||It's a " + type + "!||" 
+                    });
+                }
+                return {};
             }
         }
     ];
@@ -87,4 +98,3 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro);
-
