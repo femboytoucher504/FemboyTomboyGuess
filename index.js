@@ -1,80 +1,83 @@
-(function() {
+(function(exports) {
     "use strict";
 
-    // 1. Safely access the Vendetta/Revenge global object
-    const v = typeof vendetta !== "undefined" ? vendetta : window.vendetta;
-    if (!v) return { onLoad: () => console.log("Vendetta not found"), onUnload: () => {} };
-
-    const { metro, plugin } = v;
-    
-    // Use common components to avoid bundle crashes
-    const React = metro.common.React;
-    const ReactNative = metro.common.ReactNative;
-
-    // 2. Safe storage initialization
-    const storage = plugin && plugin.storage ? plugin.storage : {};
-    if (!storage.customSources) {
-        storage.customSources = {
-            sfw: { femboy: [], tomboy: [] },
-            nsfw: { femboy: [], tomboy: [] }
-        };
-    }
-
-    // --- DEFAULT SOURCES CONFIGURATION ---
-    const defaultSources = {
-        sfw: { femboy: ["femboymemes", "femboysfw"], tomboy: ["tomboy", "AnimeTomboys"] },
-        nsfw: { femboy: ["femboy", "traditionalfemboys"], tomboy: ["tomboygf"] }
-    };
-
-    const isImage = (url) => /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
-    const isVideo = (url) => /\.(mp4|webm)$/i.test(url);
-    
-    let activeGuesses = {};
-    let myCommands = [];
-
-    // --- MEDIA FETCHER ---
-    async function fetchMedia(type, category, mediaType) {
-        const defaultSubs = defaultSources[category]?.[type] || [];
-        const customSrcs = storage.customSources?.[category]?.[type] || [];
-        const allSources = [...defaultSubs, ...customSrcs];
+    try {
+        // Safe global context lookup for Revenge / Bunny client engines
+        const clientMod = typeof vendetta !== "undefined" ? vendetta : (typeof window !== "undefined" ? window.vendetta : null);
         
-        const filter = mediaType === "video" ? isVideo : isImage;
-        
-        for (let i = 0; i < 15; i++) {
-            if (allSources.length === 0) break;
-            const randomSrc = allSources[Math.floor(Math.random() * allSources.length)];
-            
-            try {
-                // If it's a direct API link
-                if (randomSrc.startsWith("http://") || randomSrc.startsWith("https://")) {
-                    const res = await fetch(randomSrc);
-                    const contentType = res.headers.get("content-type") || "";
-                    
-                    if (contentType.includes("image/") || contentType.includes("video/")) {
-                        if (filter(randomSrc)) return randomSrc;
-                        continue;
-                    }
-                    
-                    const data = await res.json();
-                    const mediaUrl = data.url || data.file || data.message || data.src || data.image;
-                    if (mediaUrl && typeof mediaUrl === "string" && filter(mediaUrl)) return mediaUrl;
-                } else {
-                    // Standard Reddit Fetching
-                    const res = await fetch("https://meme-api.com/gimme/" + randomSrc);
-                    const data = await res.json();
-                    if (data && data.url && filter(data.url)) return data.url;
-                }
-            } catch (e) { continue; }
+        if (!clientMod) {
+            console.error("[MediaPlugin] Client engine context wrapper could not be resolved.");
+            exports.onLoad = () => {};
+            exports.onUnload = () => {};
+            return;
         }
-        return null;
-    }
 
-    // Return the required Vendetta plugin structure
-    return {
-        onLoad: () => {
+        const metro = clientMod.metro;
+        const plugin = clientMod.plugin;
+        
+        const React = metro.common.React;
+        const ReactNative = metro.common.ReactNative;
+
+        // Initialize local persistent plugin storage structure securely
+        const storage = plugin && plugin.storage ? plugin.storage : {};
+        if (!storage.customSources) {
+            storage.customSources = {
+                sfw: { femboy: [], tomboy: [] },
+                nsfw: { femboy: [], tomboy: [] }
+            };
+        }
+
+        // --- SOURCES STORAGE DEFINITION ---
+        const defaultSources = {
+            sfw: { femboy: ["femboymemes", "femboysfw"], tomboy: ["tomboy", "AnimeTomboys"] },
+            nsfw: { femboy: ["femboy", "traditionalfemboys"], tomboy: ["tomboygf"] }
+        };
+
+        const isImage = (url) => /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
+        const isVideo = (url) => /\.(mp4|webm)$/i.test(url);
+        
+        let activeGuesses = {};
+        let myCommands = [];
+
+        // --- EXTERNAL AND LOCAL DATA FETCHER ---
+        async function fetchMedia(type, category, mediaType) {
+            const defaultSubs = defaultSources[category]?.[type] || [];
+            const customSrcs = storage.customSources?.[category]?.[type] || [];
+            const allSources = [...defaultSubs, ...customSrcs];
+            
+            const filter = mediaType === "video" ? isVideo : isImage;
+            
+            for (let i = 0; i < 15; i++) {
+                if (allSources.length === 0) break;
+                const randomSrc = allSources[Math.floor(Math.random() * allSources.length)];
+                
+                try {
+                    if (randomSrc.startsWith("http://") || randomSrc.startsWith("https://")) {
+                        const res = await fetch(randomSrc);
+                        const contentType = res.headers.get("content-type") || "";
+                        
+                        if (contentType.includes("image/") || contentType.includes("video/")) {
+                            if (filter(randomSrc)) return randomSrc;
+                            continue;
+                        }
+                        
+                        const data = await res.json();
+                        const mediaUrl = data.url || data.file || data.message || data.src || data.image;
+                        if (mediaUrl && typeof mediaUrl === "string" && filter(mediaUrl)) return mediaUrl;
+                    } else {
+                        const res = await fetch("https://meme-api.com/gimme/" + randomSrc);
+                        const data = await res.json();
+                        if (data && data.url && filter(data.url)) return data.url;
+                    }
+                } catch (e) { continue; }
+            }
+            return null;
+        }
+
+        // --- EXTENSION LIFECYCLE INITIALIZATION ---
+        exports.onLoad = () => {
             const Commands = metro.findByProps("BUILT_IN_COMMANDS");
             
-            // Generate commands securely on load
             myCommands = [
                 ...["sfw", "nsfw"].flatMap(cat => 
                     ["femboy", "tomboy"].flatMap(type => [
@@ -149,18 +152,17 @@
                 }
             ];
 
-            // Safely push commands
             if (Commands && Commands.BUILT_IN_COMMANDS) {
                 myCommands.forEach(cmd => {
-                    // Prevent duplicates if reloaded
                     if (!Commands.BUILT_IN_COMMANDS.find(c => c.id === cmd.id)) {
                         Commands.BUILT_IN_COMMANDS.push(cmd);
                     }
                 });
             }
-        },
+        };
 
-        onUnload: () => {
+        // --- TEARDOWN CLEANUP ---
+        exports.onUnload = () => {
             const Commands = metro.findByProps("BUILT_IN_COMMANDS");
             if (Commands && Commands.BUILT_IN_COMMANDS) {
                 myCommands.forEach(cmd => {
@@ -168,9 +170,10 @@
                     if (index > -1) Commands.BUILT_IN_COMMANDS.splice(index, 1);
                 });
             }
-        },
+        };
 
-        settings: function SettingsView() {
+        // --- SETTINGS RENDER PANEL ---
+        exports.settings = function SettingsView() {
             const [refresh, setRefresh] = React.useState(0);
             const [inputVal, setInputVal] = React.useState("");
             const [cat, setCat] = React.useState("sfw");
@@ -182,7 +185,6 @@
                 if (!inputVal.trim()) return;
                 const val = inputVal.trim();
                 
-                // Initialize nested objects if they don't exist
                 if (!storage.customSources[cat]) storage.customSources[cat] = {};
                 if (!storage.customSources[cat][type]) storage.customSources[cat][type] = [];
                 
@@ -201,7 +203,6 @@
 
             const currentSources = storage.customSources[cat]?.[type] || [];
 
-            // Custom Button Component to avoid React Native Button crashes
             const CustomBtn = ({ title, active, onPress, color }) => React.createElement(
                 ReactNative.TouchableOpacity,
                 { 
@@ -216,37 +217,32 @@
 
             return React.createElement(ReactNative.ScrollView, { style: { flex: 1, padding: 16 } },
                 React.createElement(ReactNative.Text, { style: { color: "#fff", fontSize: 18, fontWeight: "bold", marginBottom: 8 } }, "Add External Sources"),
-                React.createElement(ReactNative.Text, { style: { color: "#aaa", fontSize: 13, marginBottom: 16 } }, "Enter a subreddit name (e.g., 'femboymemes') OR a direct JSON API URL (e.g., 'https://api.waifu.pics/sfw/waifu')."),
+                React.createElement(ReactNative.Text, { style: { color: "#aaa", fontSize: 13, marginBottom: 16 } }, "Enter a subreddit name OR a dynamic direct link JSON API endpoint."),
                 
-                // Category Selectors
                 React.createElement(ReactNative.View, { style: { flexDirection: "row", marginBottom: 10 } },
                     CustomBtn({ title: "SFW", active: cat === "sfw", onPress: () => setCat("sfw") }),
                     CustomBtn({ title: "NSFW", active: cat === "nsfw", onPress: () => setCat("nsfw") })
                 ),
                 
-                // Type Selectors
                 React.createElement(ReactNative.View, { style: { flexDirection: "row", marginBottom: 16 } },
                     CustomBtn({ title: "Femboy", active: type === "femboy", onPress: () => setType("femboy") }),
                     CustomBtn({ title: "Tomboy", active: type === "tomboy", onPress: () => setType("tomboy") })
                 ),
 
-                // Text Input
                 React.createElement(ReactNative.TextInput, {
                     style: { backgroundColor: "#222", color: "#fff", padding: 10, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: "#444" },
-                    placeholder: "Subreddit or https:// API URL...",
+                    placeholder: "Subreddit or custom API URL...",
                     placeholderTextColor: "#888",
                     value: inputVal,
                     onChangeText: setInputVal
                 }),
 
-                // Add Button
                 CustomBtn({ title: "Add Source", active: true, onPress: handleAdd, color: "#3BA55C" }),
 
-                // Active List
-                React.createElement(ReactNative.Text, { style: { color: "#fff", fontSize: 16, fontWeight: "bold", marginTop: 24, marginBottom: 8 } }, `Custom Sources for ${cat.toUpperCase()} ${type}:`),
+                React.createElement(ReactNative.Text, { style: { color: "#fff", fontSize: 16, fontWeight: "bold", marginTop: 24, marginBottom: 8 } }, `Active Sources [${cat.toUpperCase()} - ${type}]:`),
                 
                 currentSources.length === 0 
-                    ? React.createElement(ReactNative.Text, { style: { color: "#888", fontStyle: "italic" } }, "No custom sources added.")
+                    ? React.createElement(ReactNative.Text, { style: { color: "#888", fontStyle: "italic" } }, "No custom variants defined.")
                     : currentSources.map((src, idx) => 
                         React.createElement(ReactNative.View, { key: idx, style: { flexDirection: "row", alignItems: "center", backgroundColor: "#222", padding: 10, borderRadius: 8, marginBottom: 8 } },
                             React.createElement(ReactNative.Text, { style: { color: "#ddd", flex: 1, marginRight: 8 }, numberOfLines: 1 }, src),
@@ -259,7 +255,10 @@
                         )
                     )
             );
-        }
-    };
-})();
-                               
+        };
+
+    } catch (globalError) {
+        console.error("[MediaPlugin] Critical error caught handling loader wrapper:", globalError);
+    }
+})(this.exports || (this.exports = {}));
+                                          
