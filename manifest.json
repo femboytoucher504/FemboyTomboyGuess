@@ -1,0 +1,15 @@
+{
+  "id": "guess-game",
+  "name": "TomboyOrFemboy",
+  "version": "1.0.0",
+  "description": "Random tomboy/femboy pictures and a guessing game.",
+  "main": "index.js",
+  "hash": "PASTE_YOUR_NEW_HASH_HERE",
+  "authors": [
+    {
+      "name": "femboytoucher504",
+      "id": "0"
+    }
+  ]
+}
+
