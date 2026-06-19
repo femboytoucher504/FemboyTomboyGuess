@@ -19,9 +19,15 @@
     function send(channelId, text) {
         if (!MessageActions || typeof MessageActions.sendMessage !== "function") return false;
         try {
-            MessageActions.sendMessage(channelId, { content: String(text) });
+            // Added nonce: required for modern Discord to accept manual sends
+            MessageActions.sendMessage(channelId, { 
+                content: String(text), 
+                nonce: (Math.random() * 10000000000).toString(),
+                tts: false
+            });
             return true;
         } catch(e) {
+            console.log("PLUGIN_SEND_ERROR:", e);
             return false;
         }
     }
@@ -118,7 +124,7 @@
             var src = sources[Math.floor(Math.random() * sources.length)];
             try {
                 if (src.indexOf("http") === 0) {
-                    var res = await fetch(src); // Removed User-Agent to prevent Cloudflare blocks
+                    var res = await fetch(src);
                     if (!res.ok) continue;
                     var ct = res.headers.get("content-type") || "";
                     if (ct.indexOf("image/") > -1 || ct.indexOf("video/") > -1) {
@@ -133,13 +139,13 @@
                     if (!r2.ok) continue;
                     var d2 = await r2.json();
                     if (d2 && d2.url && filter(d2.url)) {
-                        if (cat === "sfw" && d2.nsfw) continue; // Ensure SFW commands don't pull NSFW reddit posts
+                        if (cat === "sfw" && d2.nsfw) continue;
                         return d2.url;
                     }
                 }
-            } catch(e) { continue; }
+            } catch(e) { console.log("FETCH_ERR:", e); continue; }
         }
-        return "❌ Failed to find a matching " + (wantVideo ? "video" : "image") + " after 15 tries. Try enabling more packs in settings!";
+        return "❌ Failed to find a matching " + (wantVideo ? "video" : "image") + " after 15 tries.";
     }
 
     // ── Settings UI ───────────────────────────────────────────────────────────────
@@ -230,7 +236,7 @@
     // ── Commands ──────────────────────────────────────────────────────────────────
     var myCommands = [];
 
-    // /ftest (Use this to test if the fallback is working!)
+    // /ftest
     myCommands.push({
         id: "-cmd-test",
         untranslatedName: "ftest", displayName: "ftest",
@@ -239,14 +245,12 @@
         type: 1, inputType: 0, applicationId: "-1",
         execute: async function(args, ctx) {
             var channelId = ctx?.channel?.id || ctx?.channelId;
-            var text = "✅ Plugin is working! MessageActions found: " + !!MessageActions;
-            
+            var text = "✅ Plugin is working!";
             if (channelId) {
                 var sent = send(channelId, text);
                 if (sent) return {};
             }
-            // The Fallback: Returns the text directly to you if normal sending fails
-            return { content: "⚠️ Could not send publicly. Showing locally:\n\n" + text };
+            return { content: text };
         }
     });
 
@@ -265,12 +269,8 @@
                 return async function(args, ctx) {
                     var channelId = ctx?.channel?.id || ctx?.channelId;
                     var result = await fetchMedia(t, c, false);
-                    
-                    if (channelId) {
-                        var sent = send(channelId, result);
-                        if (sent) return {};
-                    }
-                    return { content: result }; // Fallback
+                    if (channelId && send(channelId, result)) return {};
+                    return { content: result };
                 };
             })(type, cat)
         });
@@ -285,12 +285,8 @@
                 return async function(args, ctx) {
                     var channelId = ctx?.channel?.id || ctx?.channelId;
                     var result = await fetchMedia(t, c, true);
-                    
-                    if (channelId) {
-                        var sent = send(channelId, result);
-                        if (sent) return {};
-                    }
-                    return { content: result }; // Fallback
+                    if (channelId && send(channelId, result)) return {};
+                    return { content: result };
                 };
             })(type, cat)
         });
@@ -307,19 +303,12 @@
             var channelId = ctx?.channel?.id || ctx?.channelId;
             var type = Math.random() > 0.5 ? "femboy" : "tomboy";
             var result = await fetchMedia(type, "sfw", false);
-            var text;
-            
-            if (result.indexOf("http") === 0) {
-                text = "📸 **Femboy or Tomboy?** Tap the spoiler when ready!\n\n||Answer: **" + type + "**||\n" + result;
-            } else {
-                text = result;
-            }
+            var text = (result.indexOf("http") === 0) 
+                ? "📸 **Femboy or Tomboy?** Tap the spoiler when ready!\n\n||Answer: **" + type + "**||\n" + result
+                : result;
 
-            if (channelId) {
-                var sent = send(channelId, text);
-                if (sent) return {};
-            }
-            return { content: text }; // Fallback
+            if (channelId && send(channelId, text)) return {};
+            return { content: text };
         }
     });
 
@@ -338,4 +327,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-        
+                                
