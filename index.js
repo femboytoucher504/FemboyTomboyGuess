@@ -16,20 +16,6 @@
         return null;
     }
 
-    // sendBotMessage = local only (only you see it), works in GlobalSearch
-    // sendMessage    = posts to channel (everyone sees it)
-    function sendLocal(cid, text) {
-        try { MA.sendBotMessage(cid, String(text)); return true; } catch(e) {}
-        return false;
-    }
-    function sendToChannel(cid, text) {
-        try { MA.sendMessage(cid, { content: String(text), tts: false }); return true; } catch(e) {}
-        return false;
-    }
-    function send(cid, text) {
-        if (!sendToChannel(cid, text)) sendLocal(cid, text);
-    }
-
     var DEFAULT_SOURCES = {
         sfw:  { femboy: ["https://api.waifu.pics/sfw/waifu","https://api.waifu.pics/sfw/shinobu"], tomboy: ["https://api.waifu.pics/sfw/neko"] },
         nsfw: { femboy: ["https://api.waifu.pics/nsfw/waifu"], tomboy: ["https://api.waifu.pics/nsfw/neko"] }
@@ -68,7 +54,7 @@
         var filter=wantVideo?isVideo:isImage, sources=buildSources(type,cat);
         if (!sources.length) return Promise.resolve(null);
         function attempt(i) {
-            if (i>=10) return Promise.resolve(null);
+            if (i>=15) return Promise.resolve(null);
             var src=sources[Math.floor(Math.random()*sources.length)];
             if (src.indexOf("http")===0) {
                 return fetch(src,{headers:{"User-Agent":"RevengePlugin/1.0"}})
@@ -76,11 +62,11 @@
                         if (!res.ok) return attempt(i+1);
                         var ct=res.headers.get("content-type")||"";
                         if (ct.indexOf("image/")>-1||ct.indexOf("video/")>-1) return filter(src)?src:attempt(i+1);
-                        return res.json().then(function(d){ var u=d.url||d.file||d.message||d.src||d.image||""; return (u&&filter(u))?u:attempt(i+1); });
+                        return res.json().then(function(d){ var u=d.url||d.file||d.message||d.src||d.image||d.link||""; return (u&&filter(u))?u:attempt(i+1); });
                     }).catch(function(){ return attempt(i+1); });
             }
             return fetch("https://meme-api.com/gimme/"+src,{headers:{"User-Agent":"RevengePlugin/1.0"}})
-                .then(function(r){ if(!r.ok) return attempt(i+1); return r.json().then(function(d){ return (d&&d.url&&filter(d.url)&&!d.nsfw)?d.url:attempt(i+1); }); })
+                .then(function(r){ if(!r.ok) return attempt(i+1); return r.json().then(function(d){ return (d&&d.url&&filter(d.url)&&!(cat==="sfw"&&d.nsfw))?d.url:attempt(i+1); }); })
                 .catch(function(){ return attempt(i+1); });
         }
         return attempt(0);
@@ -128,57 +114,64 @@
     // ── Commands ──────────────────────────────────────────────────────────────────
     var unregFns=[], activeGuesses={};
 
-    // /ftest — 4 different output attempts, wrapped in try/catch so nothing can crash it
-    unregFns.push(registerCommand({
-        name:"ftest", untranslatedName:"ftest",
-        description:"Debug: tests every output method",
-        execute:function(args,ctx){
-            var cid=getChannelId(ctx);
-            try { MA.sendBotMessage(cid,"✅ sendBotMessage works! cid="+cid); } catch(e) {}
-            try { MA.sendMessage(cid,{content:"✅ sendMessage works!",tts:false}); } catch(e) {}
-            return { content:"✅ return content works! cid="+cid };
-        }
-    }));
-
     var combos=[["femboy","sfw"],["femboy","nsfw"],["tomboy","sfw"],["tomboy","nsfw"]];
+    
     combos.forEach(function(pair){
         var type=pair[0], cat=pair[1], name=cat==="nsfw"?"nsfw_"+type:type;
+        
+        // Image Command
         unregFns.push(registerCommand({
             name:name, untranslatedName:name,
             description:"Send a "+cat.toUpperCase()+" "+type+" image",
             execute:function(args,ctx){
                 var cid=getChannelId(ctx);
-                fetchMedia(type,cat,false).then(function(url){
-                    send(cid, url||"❌ All sources failed.");
+                return fetchMedia(type,cat,false).then(function(url){
+                    var result = url || "❌ All sources failed.";
+                    var sentReal = false;
+                    try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
+                    if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
+                    return { content: result };
                 });
             }
         }));
+
+        // Video Command
         unregFns.push(registerCommand({
             name:name+"_video", untranslatedName:name+"_video",
             description:"Send a "+cat.toUpperCase()+" "+type+" video",
             execute:function(args,ctx){
                 var cid=getChannelId(ctx);
-                fetchMedia(type,cat,true).then(function(url){
-                    send(cid, url||"❌ No video found.");
+                return fetchMedia(type,cat,true).then(function(url){
+                    var result = url || "❌ No video found.";
+                    var sentReal = false;
+                    try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
+                    if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
+                    return { content: result };
                 });
             }
         }));
     });
 
+    // Guessing Game Command
     unregFns.push(registerCommand({
         name:"guess", untranslatedName:"guess",
         description:"Start a Femboy or Tomboy guessing game",
         execute:function(args,ctx){
             var cid=getChannelId(ctx);
             var type=Math.random()>0.5?"femboy":"tomboy";
-            fetchMedia(type,"sfw",false).then(function(url){
-                if (!url) { send(cid,"❌ Fetch failed. Try /femboy first."); return; }
-                activeGuesses[cid]=type;
-                send(cid,"📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url);
+            return fetchMedia(type,"sfw",false).then(function(url){
+                var result = url ? ("📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url) : "❌ Fetch failed.";
+                if (url) activeGuesses[cid]=type;
+                
+                var sentReal = false;
+                try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
+                if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
+                return { content: result };
             });
         }
     }));
 
+    // Answer Command
     unregFns.push(registerCommand({
         name:"answer", untranslatedName:"answer",
         description:"Submit your guess for the current /guess game",
@@ -191,11 +184,20 @@
             ]
         }],
         execute:function(args,ctx){
-            var cid=getChannelId(ctx), correct=activeGuesses[cid];
-            if (!correct) { send(cid,"❌ No active game. Use /guess to start one."); return; }
-            var guess=args&&args[0]&&args[0].value, won=guess===correct;
-            send(cid, won?"✅ **Correct!** It was a **"+correct+"**!":"❌ **Wrong!** It was a **"+correct+"**, not a "+guess+"!");
-            delete activeGuesses[cid];
+            var cid=getChannelId(ctx), correct=activeGuesses[cid], result = "";
+            
+            if (!correct) { 
+                result = "❌ No active game. Use /guess to start one."; 
+            } else {
+                var guess=args&&args[0]&&args[0].value, won=guess===correct;
+                result = won?"✅ **Correct!** It was a **"+correct+"**!":"❌ **Wrong!** It was a **"+correct+"**, not a "+guess+"!";
+                delete activeGuesses[cid];
+            }
+            
+            var sentReal = false;
+            try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
+            if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
+            return { content: result };
         }
     }));
 
@@ -206,4 +208,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                        
+            
