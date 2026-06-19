@@ -57,7 +57,7 @@
             if (i>=15) return Promise.resolve(null);
             var src=sources[Math.floor(Math.random()*sources.length)];
             if (src.indexOf("http")===0) {
-                return fetch(src,{headers:{"User-Agent":"RevengePlugin/1.0"}})
+                return fetch(src)
                     .then(function(res){
                         if (!res.ok) return attempt(i+1);
                         var ct=res.headers.get("content-type")||"";
@@ -65,7 +65,7 @@
                         return res.json().then(function(d){ var u=d.url||d.file||d.message||d.src||d.image||d.link||""; return (u&&filter(u))?u:attempt(i+1); });
                     }).catch(function(){ return attempt(i+1); });
             }
-            return fetch("https://meme-api.com/gimme/"+src,{headers:{"User-Agent":"RevengePlugin/1.0"}})
+            return fetch("https://meme-api.com/gimme/"+src)
                 .then(function(r){ if(!r.ok) return attempt(i+1); return r.json().then(function(d){ return (d&&d.url&&filter(d.url)&&!(cat==="sfw"&&d.nsfw))?d.url:attempt(i+1); }); })
                 .catch(function(){ return attempt(i+1); });
         }
@@ -114,6 +114,37 @@
     // ── Commands ──────────────────────────────────────────────────────────────────
     var unregFns=[], activeGuesses={};
 
+    // Upgraded Diagnostic Tool
+    unregFns.push(registerCommand({
+        name:"ftest", untranslatedName:"ftest",
+        description:"Diagnostic: tests local output, network API availability, and fetching rules",
+        execute:function(args,ctx){
+            var cid=getChannelId(ctx);
+            try { MA.sendBotMessage(cid, "⚙️ Beginning Diagnostic Test..."); } catch(e){}
+            
+            if (typeof fetch === "undefined") {
+                try { MA.sendBotMessage(cid, "❌ Error: 'fetch' does not exist in this JS engine configuration!"); } catch(e){}
+                return { content: "❌ Framework fetch missing" };
+            }
+
+            try {
+                fetch("https://api.waifu.pics/sfw/waifu")
+                    .then(function(r) { return r.json(); })
+                    .then(function(d) {
+                        var parsedUrl = d.url || "";
+                        try { MA.sendBotMessage(cid, "✅ Network Connected!\nParsed test URL successfully:\n" + parsedUrl); } catch(e){}
+                    })
+                    .catch(function(err) {
+                        try { MA.sendBotMessage(cid, "❌ Network connection rejected: " + err.message); } catch(e){}
+                    });
+            } catch(err) {
+                try { MA.sendBotMessage(cid, "❌ Synchronous network crash: " + err.message); } catch(e){}
+            }
+
+            return { content: "⏳ Running background diagnostic pipeline..." };
+        }
+    }));
+
     var combos=[["femboy","sfw"],["femboy","nsfw"],["tomboy","sfw"],["tomboy","nsfw"]];
     
     combos.forEach(function(pair){
@@ -125,13 +156,33 @@
             description:"Send a "+cat.toUpperCase()+" "+type+" image",
             execute:function(args,ctx){
                 var cid=getChannelId(ctx);
-                return fetchMedia(type,cat,false).then(function(url){
-                    var result = url || "❌ All sources failed.";
-                    var sentReal = false;
-                    try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
-                    if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
-                    return { content: result };
-                });
+                
+                try { MA.sendBotMessage(cid, "⏳ Processing request: Fetching target image resource..."); } catch(e){}
+                
+                try {
+                    fetchMedia(type,cat,false).then(function(url){
+                        if (!url) {
+                            try { MA.sendBotMessage(cid, "❌ Media Stream Empty: All configured endpoints failed to return valid data."); } catch(e){}
+                            return;
+                        }
+                        
+                        var sentReal = false;
+                        try { 
+                            MA.sendMessage(cid, { content: url, nonce: Date.now().toString(), tts: false }); 
+                            sentReal = true; 
+                        } catch(e) {}
+                        
+                        if (!sentReal) {
+                            try { MA.sendBotMessage(cid, "📱 (Local Fallback Stream):\n" + url); } catch(e){}
+                        }
+                    }).catch(function(err){
+                        try { MA.sendBotMessage(cid, "❌ Async Thread Error: " + err.message); } catch(e){}
+                    });
+                } catch(e) {
+                    try { MA.sendBotMessage(cid, "❌ Execution Pipeline Crash: " + e.message); } catch(e){}
+                }
+                
+                return { content: "✨ Processing command entry..." };
             }
         }));
 
@@ -141,13 +192,24 @@
             description:"Send a "+cat.toUpperCase()+" "+type+" video",
             execute:function(args,ctx){
                 var cid=getChannelId(ctx);
-                return fetchMedia(type,cat,true).then(function(url){
-                    var result = url || "❌ No video found.";
-                    var sentReal = false;
-                    try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
-                    if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
-                    return { content: result };
-                });
+                try { MA.sendBotMessage(cid, "⏳ Processing request: Fetching target video resource..."); } catch(e){}
+                
+                try {
+                    fetchMedia(type,cat,true).then(function(url){
+                        if (!url) {
+                            try { MA.sendBotMessage(cid, "❌ Media Stream Empty: No video found matching format criteria."); } catch(e){}
+                            return;
+                        }
+                        var sentReal = false;
+                        try { MA.sendMessage(cid, { content: url, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
+                        if (!sentReal) { try { MA.sendBotMessage(cid, "📱 (Local Fallback Stream):\n" + url); } catch(e) {} }
+                    }).catch(function(err){
+                        try { MA.sendBotMessage(cid, "❌ Async Thread Error: " + err.message); } catch(e){}
+                    });
+                } catch(e) {
+                    try { MA.sendBotMessage(cid, "❌ Execution Pipeline Crash: " + e.message); } catch(e){}
+                }
+                return { content: "✨ Processing command entry..." };
             }
         }));
     });
@@ -159,15 +221,27 @@
         execute:function(args,ctx){
             var cid=getChannelId(ctx);
             var type=Math.random()>0.5?"femboy":"tomboy";
-            return fetchMedia(type,"sfw",false).then(function(url){
-                var result = url ? ("📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url) : "❌ Fetch failed.";
-                if (url) activeGuesses[cid]=type;
-                
-                var sentReal = false;
-                try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
-                if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
-                return { content: result };
-            });
+            try { MA.sendBotMessage(cid, "⏳ Initiating Session: Downloading challenge asset..."); } catch(e){}
+            
+            try {
+                fetchMedia(type,"sfw",false).then(function(url){
+                    if (!url) {
+                        try { MA.sendBotMessage(cid, "❌ Setup Failed: Could not gather valid game asset."); } catch(e){}
+                        return;
+                    }
+                    activeGuesses[cid]=type;
+                    var msg = "📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url;
+                    
+                    var sentReal = false;
+                    try { MA.sendMessage(cid, { content: msg, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
+                    if (!sentReal) { try { MA.sendBotMessage(cid, msg); } catch(e) {} }
+                }).catch(function(err){
+                    try { MA.sendBotMessage(cid, "❌ Async Thread Error: " + err.message); } catch(e){}
+                });
+            } catch(e) {
+                try { MA.sendBotMessage(cid, "❌ Execution Pipeline Crash: " + e.message); } catch(e){}
+            }
+            return { content: "✨ Preparing game instance..." };
         }
     }));
 
@@ -187,17 +261,17 @@
             var cid=getChannelId(ctx), correct=activeGuesses[cid], result = "";
             
             if (!correct) { 
-                result = "❌ No active game. Use /guess to start one."; 
+                result = "❌ No active game session found in this channel. Run `/guess` first."; 
             } else {
                 var guess=args&&args[0]&&args[0].value, won=guess===correct;
-                result = won?"✅ **Correct!** It was a **"+correct+"**!":"❌ **Wrong!** It was a **"+correct+"**, not a "+guess+"!";
+                result = won?"✅ **Correct!** Identity confirmed: **"+correct+"**!":"❌ **Wrong!** Target profile was **"+correct+"**, not a "+guess+"!";
                 delete activeGuesses[cid];
             }
             
             var sentReal = false;
             try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
-            if (!sentReal) { try { MA.sendBotMessage(cid, "*(Local Message)*\n" + result); } catch(e) {} }
-            return { content: result };
+            if (!sentReal) { try { MA.sendBotMessage(cid, result); } catch(e) {} }
+            return { content: "✨ Evaluation complete." };
         }
     }));
 
@@ -208,4 +282,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                        
+                                                           
