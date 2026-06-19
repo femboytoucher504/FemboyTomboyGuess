@@ -1,81 +1,44 @@
 (function(exports, patcher, metro, storage) {
     "use strict";
 
-    // ── Discord internals ────────────────────────────────────────────────────────
-    const Commands = metro.findByProps("BUILT_IN_COMMANDS");
+    // Use the same registerCommand API that GlobalSearch uses
+    // This handles sending the message properly — no MessageActions needed
+    var registerCommand = vendetta.commands.registerCommand;
 
-    // More robust way to find the message sender in modern Discord
-    const MessageActions = metro.findByProps("sendMessage", "receiveMessage") 
-        || metro.findByProps("sendMessage", "editMessage")
-        || metro.findByProps("sendMessage", "deleteMessage")
-        || metro.findByProps("sendMessage");
+    var React = metro.findByProps("createElement", "useState");
+    var RN    = metro.findByProps("ScrollView", "TextInput", "TouchableOpacity");
 
-    const React = metro.findByProps("createElement", "useState");
-
-    const { ScrollView, View, Text, TextInput, TouchableOpacity } =
-        metro.findByProps("ScrollView", "TextInput", "TouchableOpacity") || {};
-
-    // ── Send helper ───────────────────────────────────────────────────────────────
-    function send(channelId, text) {
-        if (!MessageActions || typeof MessageActions.sendMessage !== "function") {
-            console.log("PLUGIN_DEBUG: MessageActions or sendMessage function not found");
-            return false;
-        }
-        try {
-            // Added nonce: required for modern Discord to accept manual sends
-            MessageActions.sendMessage(channelId, { 
-                content: String(text), 
-                nonce: (Date.now() + Math.random()).toString(),
-                tts: false
-            });
-            console.log("PLUGIN_DEBUG: Message sent successfully");
-            return true;
-        } catch(e) {
-            console.log("PLUGIN_DEBUG: Error inside sendMessage", e);
-            return false;
-        }
-    }
-
-    // ── HARDCODED default sources ─────────────────────────────────────────────────
-    const DEFAULT_SOURCES = {
+    // ── Hardcoded defaults (always work, no setup needed) ────────────────────────
+    var DEFAULT_SOURCES = {
         sfw: {
-            femboy: [
-                "https://api.waifu.pics/sfw/waifu",
-                "https://api.waifu.pics/sfw/shinobu"
-            ],
-            tomboy: [
-                "https://api.waifu.pics/sfw/neko"
-            ]
+            femboy: ["https://api.waifu.pics/sfw/waifu", "https://api.waifu.pics/sfw/shinobu"],
+            tomboy: ["https://api.waifu.pics/sfw/neko"]
         },
         nsfw: {
-            femboy: [
-                "https://api.waifu.pics/nsfw/waifu"
-            ],
-            tomboy: [
-                "https://api.waifu.pics/nsfw/neko"
-            ]
+            femboy: ["https://api.waifu.pics/nsfw/waifu"],
+            tomboy:  ["https://api.waifu.pics/nsfw/neko"]
         }
     };
 
-    // ── Preset Source Packs (for settings UI) ─────────────────────────────────────
-    const PRESET_PACKS = [
+    // ── Preset packs (for settings — extras on top of defaults) ──────────────────
+    var PRESET_PACKS = [
         {
             id: "reddit-sfw",
-            label: "📋 Reddit SFW Pack",
-            description: "Curated SFW subreddits via meme-api.com",
-            sources: { sfw: { femboy: ["femboymemes", "MildFemboys", "feminineboys"], tomboy: ["tomboy", "tomboys", "AnimeTomboys"] } }
+            label: "📋 Reddit SFW",
+            description: "Femboy & tomboy subreddits via meme-api.com",
+            sources: { sfw: { femboy: ["femboymemes","MildFemboys","feminineboys"], tomboy: ["tomboy","tomboys","AnimeTomboys"] } }
         },
         {
             id: "reddit-nsfw",
-            label: "🔞 Reddit NSFW Pack",
+            label: "🔞 Reddit NSFW",
             description: "NSFW subreddits via meme-api.com",
-            sources: { nsfw: { femboy: ["femboy", "traditionalfemboys"], tomboy: ["tomboygf"] } }
+            sources: { nsfw: { femboy: ["femboy","traditionalfemboys"], tomboy: ["tomboygf"] } }
         },
         {
             id: "waifupics-sfw",
             label: "🌸 Waifu.pics SFW",
-            description: "Anime SFW from api.waifu.pics",
-            sources: { sfw: { femboy: ["https://api.waifu.pics/sfw/waifu", "https://api.waifu.pics/sfw/shinobu"], tomboy: ["https://api.waifu.pics/sfw/neko"] } }
+            description: "Extra anime SFW from api.waifu.pics",
+            sources: { sfw: { femboy: ["https://api.waifu.pics/sfw/waifu","https://api.waifu.pics/sfw/shinobu"], tomboy: ["https://api.waifu.pics/sfw/neko"] } }
         },
         {
             id: "waifupics-nsfw",
@@ -84,152 +47,154 @@
             sources: { nsfw: { femboy: ["https://api.waifu.pics/nsfw/waifu"], tomboy: ["https://api.waifu.pics/nsfw/neko"] } }
         },
         {
-            id: "nekoslife-sfw",
+            id: "nekoslife",
             label: "🐱 Nekos.life SFW",
             description: "Anime SFW from nekos.life",
-            sources: { sfw: { femboy: ["https://nekos.life/api/v2/img/neko", "https://nekos.life/api/v2/img/meow"], tomboy: ["https://nekos.life/api/v2/img/neko"] } }
+            sources: { sfw: { femboy: ["https://nekos.life/api/v2/img/neko","https://nekos.life/api/v2/img/meow"], tomboy: ["https://nekos.life/api/v2/img/neko"] } }
         }
     ];
 
-    // ── Storage init ──────────────────────────────────────────────────────────────
+    // ── Storage ───────────────────────────────────────────────────────────────────
     function initStorage() {
         if (!storage.customSources) storage.customSources = { sfw: { femboy: [], tomboy: [] }, nsfw: { femboy: [], tomboy: [] } };
-        if (!storage.enabledPacks) storage.enabledPacks = [];
+        if (!storage.enabledPacks)  storage.enabledPacks  = [];
     }
     initStorage();
 
-    // ── Media fetcher ─────────────────────────────────────────────────────────────
-    const isImage = function(u) { return /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(u); };
-    const isVideo = function(u) { return /\.(mp4|webm)(\?.*)?$/i.test(u); };
+    // ── Fetch ─────────────────────────────────────────────────────────────────────
+    var isImage = function(u) { return /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(u); };
+    var isVideo = function(u) { return /\.(mp4|webm)(\?.*)?$/i.test(u); };
 
     async function fetchMedia(type, cat, wantVideo) {
-        var filter = wantVideo ? isVideo : isImage;
+        var filter  = wantVideo ? isVideo : isImage;
         var sources = [];
 
+        // Always start with hardcoded defaults
         var def = DEFAULT_SOURCES[cat] && DEFAULT_SOURCES[cat][type];
         if (def) for (var d = 0; d < def.length; d++) sources.push(def[d]);
 
-        var packs = storage.enabledPacks || [];
-        for (var pi = 0; pi < packs.length; pi++) {
+        // Add enabled pack sources
+        for (var pi = 0; pi < (storage.enabledPacks || []).length; pi++) {
             for (var pp = 0; pp < PRESET_PACKS.length; pp++) {
-                if (PRESET_PACKS[pp].id === packs[pi]) {
-                    var ps = PRESET_PACKS[pp].sources && PRESET_PACKS[pp].sources[cat] && PRESET_PACKS[pp].sources[cat][type];
-                    if (ps) for (var s = 0; s < ps.length; s++) sources.push(ps[s]);
+                if (PRESET_PACKS[pp].id === storage.enabledPacks[pi]) {
+                    var s = PRESET_PACKS[pp].sources && PRESET_PACKS[pp].sources[cat] && PRESET_PACKS[pp].sources[cat][type];
+                    if (s) for (var si = 0; si < s.length; si++) sources.push(s[si]);
                 }
             }
         }
 
+        // Add custom sources
         var custom = storage.customSources && storage.customSources[cat] && storage.customSources[cat][type];
-        if (custom) for (var cs = 0; cs < custom.length; cs++) sources.push(custom[cs]);
+        if (custom) for (var ci = 0; ci < custom.length; ci++) sources.push(custom[ci]);
 
-        if (sources.length === 0) return "❌ No sources found in settings.";
-
-        for (var i = 0; i < 15; i++) {
+        for (var i = 0; i < 10; i++) {
             var src = sources[Math.floor(Math.random() * sources.length)];
             try {
                 if (src.indexOf("http") === 0) {
-                    var res = await fetch(src);
+                    var res = await fetch(src, { headers: { "User-Agent": "RevengePlugin/1.0" } });
                     if (!res.ok) continue;
                     var ct = res.headers.get("content-type") || "";
                     if (ct.indexOf("image/") > -1 || ct.indexOf("video/") > -1) {
-                        if (filter(src)) return src;
-                        continue;
+                        if (filter(src)) return src; else continue;
                     }
                     var data = await res.json();
-                    var url = data.url || data.file || data.message || data.src || data.image || data.link || "";
+                    var url  = data.url || data.file || data.message || data.src || data.image || "";
                     if (url && filter(url)) return url;
                 } else {
-                    var r2 = await fetch("https://meme-api.com/gimme/" + src);
+                    var r2  = await fetch("https://meme-api.com/gimme/" + src, { headers: { "User-Agent": "RevengePlugin/1.0" } });
                     if (!r2.ok) continue;
-                    var d2 = await r2.json();
-                    if (d2 && d2.url && filter(d2.url)) {
-                        if (cat === "sfw" && d2.nsfw) continue;
-                        return d2.url;
-                    }
+                    var d2  = await r2.json();
+                    if (d2 && d2.url && filter(d2.url) && !d2.nsfw) return d2.url;
                 }
-            } catch(e) { console.log("PLUGIN_DEBUG: Fetch error", e); continue; }
+            } catch(e) { continue; }
         }
-        return "❌ Failed to find a matching " + (wantVideo ? "video" : "image") + " after 15 tries.";
+        return null;
     }
 
     // ── Settings UI ───────────────────────────────────────────────────────────────
     exports.settings = function SettingsView() {
-        var tabS   = React.useState("packs");   var tab = tabS[0];   var setTab = tabS[1];
-        var catS   = React.useState("sfw");     var cat = catS[0];   var setCat = catS[1];
-        var typeS  = React.useState("femboy");  var type = typeS[0]; var setType = typeS[1];
-        var inpS   = React.useState("");        var input = inpS[0]; var setInput = inpS[1];
-        var tickS  = React.useState(0);         var setTick = tickS[1];
+        var tabS  = React.useState("packs");  var tab  = tabS[0];  var setTab  = tabS[1];
+        var catS  = React.useState("sfw");    var cat  = catS[0];  var setCat  = catS[1];
+        var typS  = React.useState("femboy"); var typ  = typS[0];  var setTyp  = typS[1];
+        var inpS  = React.useState("");       var inp  = inpS[0];  var setInp  = inpS[1];
+        var tikS  = React.useState(0);        var setTik = tikS[1];
+        var refresh = function() { setTik(function(t) { return t+1; }); };
 
-        var refresh = function() { setTick(function(t) { return t + 1; }); };
-        var enabledPacks = storage.enabledPacks || [];
-        var custom = (storage.customSources && storage.customSources[cat] && storage.customSources[cat][type]) || [];
+        var epacks = storage.enabledPacks || [];
+        var custom = (storage.customSources && storage.customSources[cat] && storage.customSources[cat][typ]) || [];
 
-        var togglePack = function(id) {
-            var idx = storage.enabledPacks.indexOf(id);
-            if (idx > -1) storage.enabledPacks.splice(idx, 1);
-            else storage.enabledPacks.push(id);
-            refresh();
-        };
-        var addCustom = function() {
-            var v = input.trim();
-            if (!v || custom.indexOf(v) > -1) return;
-            storage.customSources[cat][type].push(v);
-            setInput(""); refresh();
-        };
-        var removeCustom = function(idx) {
-            storage.customSources[cat][type].splice(idx, 1);
-            refresh();
+        var e    = React.createElement;
+        var SV   = RN.ScrollView;
+        var V    = RN.View;
+        var T    = RN.Text;
+        var TI   = RN.TextInput;
+        var TO   = RN.TouchableOpacity;
+
+        var Pill = function(label, active, fn, mr) {
+            return e(TO, { onPress: fn, style: { flex:1, padding:10, backgroundColor: active?"#5865F2":"#2B2D31", borderRadius:8, alignItems:"center", marginRight:mr||0 } },
+                e(T, { style:{ color:"#fff", fontWeight:"bold" } }, label));
         };
 
-        var e = React.createElement;
-        var Pill = function(label, active, onPress, mr) {
-            return e(TouchableOpacity, { onPress: onPress, style: { flex: 1, padding: 10, backgroundColor: active ? "#5865F2" : "#2B2D31", borderRadius: 8, alignItems: "center", marginRight: mr || 0 } },
-                e(Text, { style: { color: "#fff", fontWeight: "bold" } }, label));
-        };
+        return e(SV, { style:{flex:1}, contentContainerStyle:{padding:16} },
 
-        return e(ScrollView, { style: { flex: 1 }, contentContainerStyle: { padding: 16 } },
-            e(View, { style: { flexDirection: "row", marginBottom: 16 } },
-                Pill("📦 Source Packs", tab === "packs", function() { setTab("packs"); }, 8),
-                Pill("✏️ Custom Sources", tab === "custom", function() { setTab("custom"); })
+            // Tabs
+            e(V, { style:{flexDirection:"row", marginBottom:16} },
+                Pill("📦 Packs", tab==="packs", function(){setTab("packs");}, 8),
+                Pill("✏️ Custom", tab==="custom", function(){setTab("custom");})
             ),
-            tab === "packs" && e(View, null,
-                e(Text, { style: { color: "#aaa", marginBottom: 12, fontSize: 13 } }, "Tap a pack to enable or disable. Defaults (waifu.pics) always active."),
+
+            // ── Packs tab ──
+            tab==="packs" && e(V, null,
+                e(T, { style:{color:"#aaa", marginBottom:12, fontSize:13} },
+                    "Waifu.pics SFW is always on by default. Enable extra packs here."
+                ),
                 PRESET_PACKS.map(function(pack) {
-                    var on = enabledPacks.indexOf(pack.id) > -1;
-                    return e(TouchableOpacity, { key: pack.id, onPress: function() { togglePack(pack.id); }, style: { backgroundColor: on ? "#1a3a6e" : "#2B2D31", borderRadius: 10, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: on ? "#5865F2" : "#444" } },
-                        e(View, { style: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" } },
-                            e(Text, { style: { color: "#fff", fontWeight: "bold", fontSize: 15, flex: 1 } }, pack.label),
-                            e(Text, { style: { fontSize: 18 } }, on ? "✅" : "⬜")
+                    var on = epacks.indexOf(pack.id) > -1;
+                    return e(TO, { key:pack.id, onPress:function(){ var i=storage.enabledPacks.indexOf(pack.id); if(i>-1) storage.enabledPacks.splice(i,1); else storage.enabledPacks.push(pack.id); refresh(); },
+                        style:{backgroundColor:on?"#1a3a6e":"#2B2D31", borderRadius:10, padding:14, marginBottom:10, borderWidth:1, borderColor:on?"#5865F2":"#444"} },
+                        e(V, {style:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"}},
+                            e(T, {style:{color:"#fff",fontWeight:"bold",fontSize:15,flex:1}}, pack.label),
+                            e(T, {style:{fontSize:18}}, on?"✅":"⬜")
                         ),
-                        e(Text, { style: { color: "#aaa", fontSize: 12, marginTop: 4 } }, pack.description)
+                        e(T, {style:{color:"#aaa",fontSize:12,marginTop:4}}, pack.description)
                     );
                 })
             ),
-            tab === "custom" && e(View, null,
-                e(View, { style: { flexDirection: "row", marginBottom: 8 } },
-                    Pill("SFW", cat === "sfw", function() { setCat("sfw"); }, 8),
-                    Pill("NSFW", cat === "nsfw", function() { setCat("nsfw"); })
+
+            // ── Custom tab ──
+            tab==="custom" && e(V, null,
+                e(V, {style:{flexDirection:"row",marginBottom:8}},
+                    Pill("SFW",  cat==="sfw",  function(){setCat("sfw"); }, 8),
+                    Pill("NSFW", cat==="nsfw", function(){setCat("nsfw");})
                 ),
-                e(View, { style: { flexDirection: "row", marginBottom: 16 } },
-                    Pill("Femboy", type === "femboy", function() { setType("femboy"); }, 8),
-                    Pill("Tomboy", type === "tomboy", function() { setType("tomboy"); })
+                e(V, {style:{flexDirection:"row",marginBottom:12}},
+                    Pill("Femboy", typ==="femboy", function(){setTyp("femboy");}, 8),
+                    Pill("Tomboy", typ==="tomboy", function(){setTyp("tomboy");})
                 ),
-                e(TextInput, {
-                    style: { backgroundColor: "#1E1F22", color: "#fff", padding: 12, borderRadius: 8, borderWidth: 1, borderColor: "#444", marginBottom: 8 },
-                    placeholder: "subreddit or https://...", placeholderTextColor: "#555",
-                    value: input, onChangeText: setInput, autoCapitalize: "none", autoCorrect: false
+                e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}},
+                    "Type a subreddit name (e.g. femboymemes) OR a full URL (e.g. https://api.waifu.pics/sfw/waifu)"
+                ),
+                e(TI, {
+                    style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
+                    placeholder:"subreddit name or https://...", placeholderTextColor:"#555",
+                    value:inp, onChangeText:setInp, autoCapitalize:"none", autoCorrect:false
                 }),
-                e(TouchableOpacity, { onPress: addCustom, style: { backgroundColor: "#5865F2", padding: 12, borderRadius: 8, alignItems: "center", marginBottom: 24 } },
-                    e(Text, { style: { color: "#fff", fontWeight: "bold" } }, "+ Add Source")
+                e(TO, { onPress:function(){
+                    var v=inp.trim();
+                    if(!v||custom.indexOf(v)>-1) return;
+                    storage.customSources[cat][typ].push(v);
+                    setInp(""); refresh();
+                }, style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20} },
+                    e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")
                 ),
-                e(Text, { style: { color: "#fff", fontWeight: "bold", marginBottom: 8 } }, "Custom — " + cat.toUpperCase() + " / " + type + ":"),
-                custom.length === 0
-                    ? e(Text, { style: { color: "#555", fontStyle: "italic" } }, "None added yet.")
-                    : custom.map(function(src, idx) {
-                        return e(View, { key: idx, style: { flexDirection: "row", alignItems: "center", backgroundColor: "#2B2D31", padding: 10, borderRadius: 8, marginBottom: 8 } },
-                            e(Text, { style: { color: "#ddd", flex: 1, marginRight: 8 }, numberOfLines: 1 }, src),
-                            e(TouchableOpacity, { onPress: function() { removeCustom(idx); } },
-                                e(Text, { style: { color: "#ff5555", fontWeight: "bold", fontSize: 16 } }, "✕")
+                e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your sources — "+cat.toUpperCase()+" / "+typ+":"),
+                custom.length===0
+                    ? e(T, {style:{color:"#555",fontStyle:"italic"}}, "None yet. Defaults (waifu.pics) always active.")
+                    : custom.map(function(src,idx){
+                        return e(V, {key:idx, style:{flexDirection:"row",alignItems:"center",backgroundColor:"#2B2D31",padding:10,borderRadius:8,marginBottom:8}},
+                            e(T, {style:{color:"#ddd",flex:1,marginRight:8},numberOfLines:1}, src),
+                            e(TO, {onPress:function(){ storage.customSources[cat][typ].splice(idx,1); refresh(); }},
+                                e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "✕")
                             )
                         );
                     })
@@ -237,98 +202,65 @@
         );
     };
 
-    // ── Commands ──────────────────────────────────────────────────────────────────
-    var myCommands = [];
+    // ── Commands (using registerCommand — same as GlobalSearch) ───────────────────
+    var unregFns = [];
+    var activeGuesses = {};
 
-    // /ftest
-    myCommands.push({
-        id: "-cmd-test",
-        untranslatedName: "ftest", displayName: "ftest",
-        untranslatedDescription: "Debug: checks if the plugin can send messages",
-        displayDescription: "Debug: checks if the plugin can send messages",
-        type: 1, inputType: 0, applicationId: "-1",
-        execute: async function(args, ctx) {
-            var channelId = ctx?.channel?.id || ctx?.channelId;
-            var text = "✅ Plugin is working!";
-            if (channelId) {
-                var sent = send(channelId, text);
-                if (sent) return {};
-            }
-            return { content: text };
+    // /ftest — no fetch, no storage, just proves commands work
+    unregFns.push(registerCommand({
+        name: "ftest",
+        untranslatedName: "ftest",
+        description: "Debug: proves the plugin is alive",
+        execute: async function() {
+            return { content: "✅ FemboyTomboyGuess plugin is working!" };
         }
-    });
+    }));
 
     var combos = [["femboy","sfw"],["femboy","nsfw"],["tomboy","sfw"],["tomboy","nsfw"]];
     combos.forEach(function(pair) {
         var type = pair[0]; var cat = pair[1];
-        var name = cat === "nsfw" ? "nsfw_" + type : type;
+        var name = cat==="nsfw" ? "nsfw_"+type : type;
 
-        myCommands.push({
-            id: "-cmd-" + cat + "-" + type + "-img",
-            untranslatedName: name, displayName: name,
-            untranslatedDescription: "Send a " + cat.toUpperCase() + " " + type + " image",
-            displayDescription: "Send a " + cat.toUpperCase() + " " + type + " image",
-            type: 1, inputType: 0, applicationId: "-1",
-            execute: (function(t, c) {
-                return async function(args, ctx) {
-                    var channelId = ctx?.channel?.id || ctx?.channelId;
-                    var result = await fetchMedia(t, c, false);
-                    if (channelId && send(channelId, result)) return {};
-                    return { content: result };
-                };
-            })(type, cat)
-        });
+        unregFns.push(registerCommand({
+            name: name,
+            untranslatedName: name,
+            description: "Send a "+cat.toUpperCase()+" "+type+" image",
+            execute: async function() {
+                var url = await fetchMedia(type, cat, false);
+                return { content: url || "❌ All sources failed. Try /ftest first." };
+            }
+        }));
 
-        myCommands.push({
-            id: "-cmd-" + cat + "-" + type + "-vid",
-            untranslatedName: name + "_video", displayName: name + "_video",
-            untranslatedDescription: "Send a " + cat.toUpperCase() + " " + type + " video",
-            displayDescription: "Send a " + cat.toUpperCase() + " " + type + " video",
-            type: 1, inputType: 0, applicationId: "-1",
-            execute: (function(t, c) {
-                return async function(args, ctx) {
-                    var channelId = ctx?.channel?.id || ctx?.channelId;
-                    var result = await fetchMedia(t, c, true);
-                    if (channelId && send(channelId, result)) return {};
-                    return { content: result };
-                };
-            })(type, cat)
-        });
+        unregFns.push(registerCommand({
+            name: name+"_video",
+            untranslatedName: name+"_video",
+            description: "Send a "+cat.toUpperCase()+" "+type+" video",
+            execute: async function() {
+                var url = await fetchMedia(type, cat, true);
+                return { content: url || "❌ No video found. Most sources are images only." };
+            }
+        }));
     });
 
-    // ── THE GUESSING GAME COMMAND ──
-    myCommands.push({
-        id: "-cmd-guess",
-        untranslatedName: "guess", displayName: "guess",
-        untranslatedDescription: "Femboy or Tomboy guessing game",
-        displayDescription: "Femboy or Tomboy guessing game",
-        type: 1, inputType: 0, applicationId: "-1",
+    unregFns.push(registerCommand({
+        name: "guess",
+        untranslatedName: "guess",
+        description: "Femboy or Tomboy guessing game",
         execute: async function(args, ctx) {
-            var channelId = ctx?.channel?.id || ctx?.channelId;
             var type = Math.random() > 0.5 ? "femboy" : "tomboy";
-            var result = await fetchMedia(type, "sfw", false);
-            var text = (result.indexOf("http") === 0) 
-                ? "📸 **Femboy or Tomboy?** Tap the spoiler when ready!\n\n||Answer: **" + type + "**||\n" + result
-                : result;
-
-            if (channelId && send(channelId, text)) return {};
-            return { content: text };
+            var url  = await fetchMedia(type, "sfw", false);
+            if (!url) return { content: "❌ Fetch failed. Make sure you can see images with /femboy first." };
+            if (ctx && ctx.channel) activeGuesses[ctx.channel.id] = type;
+            return { content: "📸 **Femboy or Tomboy?** Tap the spoiler when ready!\n\n||Answer: **"+type+"**||\n"+url };
         }
-    });
-
-    if (Commands && Commands.BUILT_IN_COMMANDS) {
-        myCommands.forEach(function(cmd) { Commands.BUILT_IN_COMMANDS.push(cmd); });
-    }
+    }));
 
     exports.onUnload = function() {
-        if (Commands && Commands.BUILT_IN_COMMANDS) {
-            myCommands.forEach(function(cmd) {
-                var i = Commands.BUILT_IN_COMMANDS.findIndex(function(c) { return c.id === cmd.id; });
-                if (i > -1) Commands.BUILT_IN_COMMANDS.splice(i, 1);
-            });
-        }
+        unregFns.forEach(function(fn) { try { fn(); } catch(e) {} });
+        unregFns = [];
+        activeGuesses = {};
     };
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                                      
+                                                                       
