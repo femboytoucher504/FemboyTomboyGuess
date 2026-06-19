@@ -17,17 +17,21 @@
 
     // ── Send helper ───────────────────────────────────────────────────────────────
     function send(channelId, text) {
-        if (!MessageActions || typeof MessageActions.sendMessage !== "function") return false;
+        if (!MessageActions || typeof MessageActions.sendMessage !== "function") {
+            console.log("PLUGIN_DEBUG: MessageActions or sendMessage function not found");
+            return false;
+        }
         try {
             // Added nonce: required for modern Discord to accept manual sends
             MessageActions.sendMessage(channelId, { 
                 content: String(text), 
-                nonce: (Math.random() * 10000000000).toString(),
+                nonce: (Date.now() + Math.random()).toString(),
                 tts: false
             });
+            console.log("PLUGIN_DEBUG: Message sent successfully");
             return true;
         } catch(e) {
-            console.log("PLUGIN_SEND_ERROR:", e);
+            console.log("PLUGIN_DEBUG: Error inside sendMessage", e);
             return false;
         }
     }
@@ -143,7 +147,7 @@
                         return d2.url;
                     }
                 }
-            } catch(e) { console.log("FETCH_ERR:", e); continue; }
+            } catch(e) { console.log("PLUGIN_DEBUG: Fetch error", e); continue; }
         }
         return "❌ Failed to find a matching " + (wantVideo ? "video" : "image") + " after 15 tries.";
     }
@@ -327,4 +331,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                                
+                                      
