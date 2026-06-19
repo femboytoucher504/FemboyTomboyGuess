@@ -114,34 +114,43 @@
     // ── Commands ──────────────────────────────────────────────────────────────────
     var unregFns=[], activeGuesses={};
 
-    // Upgraded Diagnostic Tool
+    // Multi-Path VPN Diagnostic Tool
     unregFns.push(registerCommand({
         name:"ftest", untranslatedName:"ftest",
-        description:"Diagnostic: tests local output, network API availability, and fetching rules",
+        description:"VPN Path Check: Tests if specific domains or all connections are blocked",
         execute:function(args,ctx){
             var cid=getChannelId(ctx);
-            try { MA.sendBotMessage(cid, "⚙️ Beginning Diagnostic Test..."); } catch(e){}
+            try { MA.sendBotMessage(cid, "⚙️ VPN Diagnostic active. Testing network routes..."); } catch(e){}
             
-            if (typeof fetch === "undefined") {
-                try { MA.sendBotMessage(cid, "❌ Error: 'fetch' does not exist in this JS engine configuration!"); } catch(e){}
-                return { content: "❌ Framework fetch missing" };
+            // Route A: GitHub (Safe baseline)
+            try {
+                fetch("https://api.github.com/zen")
+                    .then(function(r) { return r.text(); })
+                    .then(function(text) {
+                        try { MA.sendBotMessage(cid, "✅ Path A (GitHub Baseline): Connected!\nResponse: \"" + text + "\""); } catch(e){}
+                    })
+                    .catch(function(err) {
+                        try { MA.sendBotMessage(cid, "❌ Path A (GitHub Baseline) Failed: " + err.message); } catch(e){}
+                    });
+            } catch(e) {
+                try { MA.sendBotMessage(cid, "❌ Path A Fatal Crash: " + e.message); } catch(e){}
             }
 
+            // Route B: Waifu.pics (Target API)
             try {
                 fetch("https://api.waifu.pics/sfw/waifu")
                     .then(function(r) { return r.json(); })
                     .then(function(d) {
-                        var parsedUrl = d.url || "";
-                        try { MA.sendBotMessage(cid, "✅ Network Connected!\nParsed test URL successfully:\n" + parsedUrl); } catch(e){}
+                        try { MA.sendBotMessage(cid, "✅ Path B (Waifu.pics Target): Connected!\nFound image URL successfully."); } catch(e){}
                     })
                     .catch(function(err) {
-                        try { MA.sendBotMessage(cid, "❌ Network connection rejected: " + err.message); } catch(e){}
+                        try { MA.sendBotMessage(cid, "❌ Path B (Waifu.pics Target) Failed: " + err.message); } catch(e){}
                     });
-            } catch(err) {
-                try { MA.sendBotMessage(cid, "❌ Synchronous network crash: " + err.message); } catch(e){}
+            } catch(e) {
+                try { MA.sendBotMessage(cid, "❌ Path B Fatal Crash: " + e.message); } catch(e){}
             }
 
-            return { content: "⏳ Running background diagnostic pipeline..." };
+            return { content: "⏳ Auditing active VPN network interfaces..." };
         }
     }));
 
@@ -156,7 +165,6 @@
             description:"Send a "+cat.toUpperCase()+" "+type+" image",
             execute:function(args,ctx){
                 var cid=getChannelId(ctx);
-                
                 try { MA.sendBotMessage(cid, "⏳ Processing request: Fetching target image resource..."); } catch(e){}
                 
                 try {
@@ -165,23 +173,15 @@
                             try { MA.sendBotMessage(cid, "❌ Media Stream Empty: All configured endpoints failed to return valid data."); } catch(e){}
                             return;
                         }
-                        
                         var sentReal = false;
-                        try { 
-                            MA.sendMessage(cid, { content: url, nonce: Date.now().toString(), tts: false }); 
-                            sentReal = true; 
-                        } catch(e) {}
-                        
-                        if (!sentReal) {
-                            try { MA.sendBotMessage(cid, "📱 (Local Fallback Stream):\n" + url); } catch(e){}
-                        }
+                        try { MA.sendMessage(cid, { content: url, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
+                        if (!sentReal) { try { MA.sendBotMessage(cid, "📱 (Local Fallback Stream):\n" + url); } catch(e){} }
                     }).catch(function(err){
                         try { MA.sendBotMessage(cid, "❌ Async Thread Error: " + err.message); } catch(e){}
                     });
                 } catch(e) {
                     try { MA.sendBotMessage(cid, "❌ Execution Pipeline Crash: " + e.message); } catch(e){}
                 }
-                
                 return { content: "✨ Processing command entry..." };
             }
         }));
@@ -231,7 +231,6 @@
                     }
                     activeGuesses[cid]=type;
                     var msg = "📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url;
-                    
                     var sentReal = false;
                     try { MA.sendMessage(cid, { content: msg, nonce: Date.now().toString(), tts: false }); sentReal = true; } catch(e) {}
                     if (!sentReal) { try { MA.sendBotMessage(cid, msg); } catch(e) {} }
@@ -282,4 +281,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                                                           
+                                        
