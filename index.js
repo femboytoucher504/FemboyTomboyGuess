@@ -15,7 +15,7 @@
     }
 
     function send(cid, text) {
-        try { MA.sendMessage(cid, { content: String(text), tts: false }); return; } catch(e) {}
+        try { MA.sendMessage(cid, { content: String(text), tts: false }, null, { nonce: Date.now().toString() }); return; } catch(e) {}
         try { MA.sendBotMessage(cid, text); } catch(e) {}
     }
 
@@ -229,4 +229,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-        
+                
