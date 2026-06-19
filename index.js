@@ -6,10 +6,28 @@
     var RN    = metro.findByProps("ScrollView", "TextInput", "TouchableOpacity");
     var MA    = metro.findByProps("sendMessage", "sendBotMessage");
 
-    // Try sendMessage first, fall back to sendBotMessage
-    function sendMsg(channelId, text) {
-        try { MA.sendMessage(channelId, { content: String(text), tts: false }); return; } catch(e) {}
-        try { MA.sendBotMessage(channelId, String(text)); } catch(e) {}
+    // Get channel ID from the store — don't rely on ctx at all
+    var ChannelStore = metro.findByProps("getLastSelectedChannelId");
+
+    function getChannelId(ctx) {
+        try { if (ctx && ctx.channel && ctx.channel.id) return ctx.channel.id; } catch(e) {}
+        try { if (ctx && ctx.channelId) return ctx.channelId; } catch(e) {}
+        try { return ChannelStore.getLastSelectedChannelId(); } catch(e) {}
+        return null;
+    }
+
+    // sendBotMessage = local only (only you see it), works in GlobalSearch
+    // sendMessage    = posts to channel (everyone sees it)
+    function sendLocal(cid, text) {
+        try { MA.sendBotMessage(cid, String(text)); return true; } catch(e) {}
+        return false;
+    }
+    function sendToChannel(cid, text) {
+        try { MA.sendMessage(cid, { content: String(text), tts: false }); return true; } catch(e) {}
+        return false;
+    }
+    function send(cid, text) {
+        if (!sendToChannel(cid, text)) sendLocal(cid, text);
     }
 
     var DEFAULT_SOURCES = {
@@ -18,11 +36,11 @@
     };
 
     var PRESET_PACKS = [
-        { id:"reddit-sfw",    label:"📋 Reddit SFW",       description:"Femboy & tomboy subreddits via meme-api.com", sources:{ sfw:{ femboy:["femboymemes","MildFemboys","feminineboys"], tomboy:["tomboy","tomboys","AnimeTomboys"] } } },
-        { id:"reddit-nsfw",   label:"🔞 Reddit NSFW",      description:"NSFW subreddits via meme-api.com",            sources:{ nsfw:{ femboy:["femboy","traditionalfemboys"], tomboy:["tomboygf"] } } },
-        { id:"waifupics-sfw", label:"🌸 Waifu.pics SFW",   description:"Extra anime SFW from api.waifu.pics",         sources:{ sfw:{ femboy:["https://api.waifu.pics/sfw/waifu","https://api.waifu.pics/sfw/shinobu"], tomboy:["https://api.waifu.pics/sfw/neko"] } } },
-        { id:"waifupics-nsfw",label:"🔞🌸 Waifu.pics NSFW",description:"Anime NSFW from api.waifu.pics",              sources:{ nsfw:{ femboy:["https://api.waifu.pics/nsfw/waifu"], tomboy:["https://api.waifu.pics/nsfw/neko"] } } },
-        { id:"nekoslife",     label:"🐱 Nekos.life SFW",   description:"Anime SFW from nekos.life",                   sources:{ sfw:{ femboy:["https://nekos.life/api/v2/img/neko","https://nekos.life/api/v2/img/meow"], tomboy:["https://nekos.life/api/v2/img/neko"] } } }
+        { id:"reddit-sfw",    label:"📋 Reddit SFW",        description:"Femboy & tomboy subreddits via meme-api.com", sources:{ sfw:{ femboy:["femboymemes","MildFemboys","feminineboys"], tomboy:["tomboy","tomboys","AnimeTomboys"] } } },
+        { id:"reddit-nsfw",   label:"🔞 Reddit NSFW",       description:"NSFW subreddits via meme-api.com",            sources:{ nsfw:{ femboy:["femboy","traditionalfemboys"], tomboy:["tomboygf"] } } },
+        { id:"waifupics-sfw", label:"🌸 Waifu.pics SFW",    description:"Extra anime SFW from api.waifu.pics",         sources:{ sfw:{ femboy:["https://api.waifu.pics/sfw/waifu","https://api.waifu.pics/sfw/shinobu"], tomboy:["https://api.waifu.pics/sfw/neko"] } } },
+        { id:"waifupics-nsfw",label:"🔞🌸 Waifu.pics NSFW", description:"Anime NSFW from api.waifu.pics",              sources:{ nsfw:{ femboy:["https://api.waifu.pics/nsfw/waifu"], tomboy:["https://api.waifu.pics/nsfw/neko"] } } },
+        { id:"nekoslife",     label:"🐱 Nekos.life SFW",    description:"Anime SFW from nekos.life",                   sources:{ sfw:{ femboy:["https://nekos.life/api/v2/img/neko","https://nekos.life/api/v2/img/meow"], tomboy:["https://nekos.life/api/v2/img/neko"] } } }
     ];
 
     if (!storage.customSources) storage.customSources = { sfw:{ femboy:[], tomboy:[] }, nsfw:{ femboy:[], tomboy:[] } };
@@ -32,10 +50,9 @@
     var isVideo = function(u) { return /\.(mp4|webm)(\?.*)?$/i.test(u); };
 
     function buildSources(type, cat) {
-        var out = [];
-        var def = DEFAULT_SOURCES[cat] && DEFAULT_SOURCES[cat][type];
+        var out=[], def=DEFAULT_SOURCES[cat]&&DEFAULT_SOURCES[cat][type];
         if (def) for (var d=0;d<def.length;d++) out.push(def[d]);
-        var pks = storage.enabledPacks||[];
+        var pks=storage.enabledPacks||[];
         for (var pi=0;pi<pks.length;pi++) for (var pp=0;pp<PRESET_PACKS.length;pp++) {
             if (PRESET_PACKS[pp].id===pks[pi]) {
                 var s=PRESET_PACKS[pp].sources&&PRESET_PACKS[pp].sources[cat]&&PRESET_PACKS[pp].sources[cat][type];
@@ -61,11 +78,10 @@
                         if (ct.indexOf("image/")>-1||ct.indexOf("video/")>-1) return filter(src)?src:attempt(i+1);
                         return res.json().then(function(d){ var u=d.url||d.file||d.message||d.src||d.image||""; return (u&&filter(u))?u:attempt(i+1); });
                     }).catch(function(){ return attempt(i+1); });
-            } else {
-                return fetch("https://meme-api.com/gimme/"+src,{headers:{"User-Agent":"RevengePlugin/1.0"}})
-                    .then(function(r){ if(!r.ok) return attempt(i+1); return r.json().then(function(d){ return (d&&d.url&&filter(d.url)&&!d.nsfw)?d.url:attempt(i+1); }); })
-                    .catch(function(){ return attempt(i+1); });
             }
+            return fetch("https://meme-api.com/gimme/"+src,{headers:{"User-Agent":"RevengePlugin/1.0"}})
+                .then(function(r){ if(!r.ok) return attempt(i+1); return r.json().then(function(d){ return (d&&d.url&&filter(d.url)&&!d.nsfw)?d.url:attempt(i+1); }); })
+                .catch(function(){ return attempt(i+1); });
         }
         return attempt(0);
     }
@@ -100,7 +116,7 @@
                 e(TI,{style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},placeholder:"subreddit or https://...",placeholderTextColor:"#555",value:inp,onChangeText:setInp,autoCapitalize:"none",autoCorrect:false}),
                 e(TO,{onPress:function(){ var v=inp.trim(); if(!v||custom.indexOf(v)>-1) return; storage.customSources[cat][typ].push(v); setInp(""); refresh(); },style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20}},e(T,{style:{color:"#fff",fontWeight:"bold"}},"+ Add Source")),
                 e(T,{style:{color:"#fff",fontWeight:"bold",marginBottom:8}},"Your sources — "+cat.toUpperCase()+" / "+typ+":"),
-                custom.length===0?e(T,{style:{color:"#555",fontStyle:"italic"}},"None yet. Defaults always active."):custom.map(function(src,idx){
+                custom.length===0?e(T,{style:{color:"#555",fontStyle:"italic"}},"None yet."):custom.map(function(src,idx){
                     return e(V,{key:idx,style:{flexDirection:"row",alignItems:"center",backgroundColor:"#2B2D31",padding:10,borderRadius:8,marginBottom:8}},
                         e(T,{style:{color:"#ddd",flex:1,marginRight:8},numberOfLines:1},src),
                         e(TO,{onPress:function(){ storage.customSources[cat][typ].splice(idx,1); refresh(); }},e(T,{style:{color:"#ff5555",fontWeight:"bold",fontSize:16}},"✕")));
@@ -112,38 +128,38 @@
     // ── Commands ──────────────────────────────────────────────────────────────────
     var unregFns=[], activeGuesses={};
 
-    // /ftest — tests BOTH sendMessage AND return { content } so we see which one works
+    // /ftest — 4 different output attempts, wrapped in try/catch so nothing can crash it
     unregFns.push(registerCommand({
         name:"ftest", untranslatedName:"ftest",
-        description:"Debug: tests message sending",
+        description:"Debug: tests every output method",
         execute:function(args,ctx){
-            sendMsg(ctx.channel.id, "✅ sendMessage works!");
-            return { content:"✅ return content works!" };
+            var cid=getChannelId(ctx);
+            try { MA.sendBotMessage(cid,"✅ sendBotMessage works! cid="+cid); } catch(e) {}
+            try { MA.sendMessage(cid,{content:"✅ sendMessage works!",tts:false}); } catch(e) {}
+            return { content:"✅ return content works! cid="+cid };
         }
     }));
 
     var combos=[["femboy","sfw"],["femboy","nsfw"],["tomboy","sfw"],["tomboy","nsfw"]];
     combos.forEach(function(pair){
         var type=pair[0], cat=pair[1], name=cat==="nsfw"?"nsfw_"+type:type;
-
         unregFns.push(registerCommand({
             name:name, untranslatedName:name,
             description:"Send a "+cat.toUpperCase()+" "+type+" image",
             execute:function(args,ctx){
-                var cid=ctx.channel.id;
+                var cid=getChannelId(ctx);
                 fetchMedia(type,cat,false).then(function(url){
-                    sendMsg(cid, url||"❌ All sources failed. Check your internet.");
+                    send(cid, url||"❌ All sources failed.");
                 });
             }
         }));
-
         unregFns.push(registerCommand({
             name:name+"_video", untranslatedName:name+"_video",
             description:"Send a "+cat.toUpperCase()+" "+type+" video",
             execute:function(args,ctx){
-                var cid=ctx.channel.id;
+                var cid=getChannelId(ctx);
                 fetchMedia(type,cat,true).then(function(url){
-                    sendMsg(cid, url||"❌ No video found. Most sources are images only.");
+                    send(cid, url||"❌ No video found.");
                 });
             }
         }));
@@ -153,12 +169,12 @@
         name:"guess", untranslatedName:"guess",
         description:"Start a Femboy or Tomboy guessing game",
         execute:function(args,ctx){
-            var cid=ctx.channel.id;
+            var cid=getChannelId(ctx);
             var type=Math.random()>0.5?"femboy":"tomboy";
             fetchMedia(type,"sfw",false).then(function(url){
-                if (!url) { sendMsg(cid,"❌ Fetch failed. Try /femboy first."); return; }
+                if (!url) { send(cid,"❌ Fetch failed. Try /femboy first."); return; }
                 activeGuesses[cid]=type;
-                sendMsg(cid,"📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url);
+                send(cid,"📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url);
             });
         }
     }));
@@ -175,11 +191,10 @@
             ]
         }],
         execute:function(args,ctx){
-            var cid=ctx.channel.id, correct=activeGuesses[cid];
-            if (!correct) { sendMsg(cid,"❌ No active game here. Use `/guess` to start one."); return; }
-            var guess=args&&args[0]&&args[0].value;
-            var won=guess===correct;
-            sendMsg(cid, won ? "✅ **Correct!** It was a **"+correct+"**! Well done!" : "❌ **Wrong!** It was a **"+correct+"**, not a "+guess+"!");
+            var cid=getChannelId(ctx), correct=activeGuesses[cid];
+            if (!correct) { send(cid,"❌ No active game. Use /guess to start one."); return; }
+            var guess=args&&args[0]&&args[0].value, won=guess===correct;
+            send(cid, won?"✅ **Correct!** It was a **"+correct+"**!":"❌ **Wrong!** It was a **"+correct+"**, not a "+guess+"!");
             delete activeGuesses[cid];
         }
     }));
@@ -191,3 +206,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
+                        
