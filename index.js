@@ -20,8 +20,21 @@
     }
 
     var DEFAULT_SOURCES = {
-        sfw:  { femboy: ["https://api.waifu.pics/sfw/waifu", "https://api.waifu.pics/sfw/shinobu"], tomboy: ["https://api.waifu.pics/sfw/neko"] },
-        nsfw: { femboy: ["https://api.waifu.pics/nsfw/waifu"], tomboy: ["https://api.waifu.pics/nsfw/neko"] }
+        sfw: {
+            femboy: [
+                "https://nekos.best/api/v2/femboy",
+                "https://api.waifu.pics/sfw/waifu",
+                "https://api.waifu.pics/sfw/shinobu"
+            ],
+            tomboy: [
+                "https://nekos.best/api/v2/tomboy",
+                "https://api.waifu.pics/sfw/neko"
+            ]
+        },
+        nsfw: {
+            femboy: ["https://api.waifu.pics/nsfw/waifu"],
+            tomboy:  ["https://api.waifu.pics/nsfw/neko"]
+        }
     };
 
     var PRESET_PACKS = [
@@ -67,15 +80,22 @@
                         var ct = res.headers.get("content-type") || "";
                         if (ct.indexOf("image/") > -1 || ct.indexOf("video/") > -1) return filter(src) ? src : attempt(i + 1);
                         return res.json().then(function(d) {
-                            var u = d.url || d.file || d.message || d.src || d.image || "";
-                            return (u && filter(u)) ? u : attempt(i + 1);
+                            var u = (d.results && d.results[0] && d.results[0].url) ||
+                                     d.url || d.file || d.message || d.src || d.image || "";
+                            // nekos.best returns webp images — accept them even without extension check
+                            if (u && (filter(u) || u.indexOf("nekos.best") > -1)) return u;
+                            return attempt(i + 1);
                         });
                     }).catch(function() { return attempt(i + 1); });
             }
             return fetch("https://meme-api.com/gimme/" + src, { headers: { "User-Agent": "RevengePlugin/1.0" } })
                 .then(function(r) {
                     if (!r.ok) return attempt(i + 1);
-                    return r.json().then(function(d) { return (d && d.url && filter(d.url) && !d.nsfw) ? d.url : attempt(i + 1); });
+                    return r.json().then(function(d) {
+                        if (!d || !d.url || !filter(d.url)) return attempt(i + 1);
+                        if (cat === "sfw" && d.nsfw) return attempt(i + 1);
+                        return d.url;
+                    });
                 }).catch(function() { return attempt(i + 1); });
         }
         return attempt(0);
@@ -229,4 +249,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                
+            
