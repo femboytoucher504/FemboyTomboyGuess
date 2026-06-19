@@ -15,8 +15,8 @@
     }
 
     function send(cid, text) {
-        try { MA.sendBotMessage(cid, text); return; } catch(e) {}
-        try { MA.sendMessage(cid, { content: String(text), tts: false }); } catch(e) {}
+        try { MA.sendMessage(cid, { content: String(text), tts: false }); return; } catch(e) {}
+        try { MA.sendBotMessage(cid, text); } catch(e) {}
     }
 
     var DEFAULT_SOURCES = {
@@ -229,4 +229,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                
+        
