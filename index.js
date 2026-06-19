@@ -15,7 +15,7 @@
         return null;
     }
 
-    // Redesigned to utilize diverse endpoints to bypass localized VPN infrastructure blocks
+    // High-availability endpoints verified to bypass strict VPN proxy layers.
     var DEFAULT_SOURCES = {
         sfw: {
             femboy: [
@@ -51,6 +51,7 @@
     if (!storage.customSources) storage.customSources = { sfw:{ femboy:[], tomboy:[] }, nsfw:{ femboy:[], tomboy:[] } };
     if (!storage.enabledPacks)  storage.enabledPacks  = [];
 
+    // Strict regex validation to ensure payloads are embeddable media.
     var isImage = function(u) { return /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(u); };
     var isVideo = function(u) { return /\.(mp4|webm)(\?.*)?$/i.test(u); };
 
@@ -90,14 +91,13 @@
         var sources = buildSources(type, cat);
         if (!sources.length) return Promise.resolve(null);
 
-        // Shuffle baseline array on execution to maximize routing variety
+        // Shuffle baseline array to dynamically bypass rate-limiting
         sources.sort(function() { return 0.5 - Math.random(); });
 
         function attempt(index) {
             if (index >= sources.length || index >= 12) return Promise.resolve(null);
             var src = sources[index];
 
-            // Execution Path 1: Pure JSON HTTP Endpoints
             if (src.indexOf("http") === 0) {
                 return fetch(src)
                     .then(function(res) {
@@ -107,6 +107,7 @@
                             if (data.results && data.results[0]) u = data.results[0].url || "";
                             else u = data.url || data.file || data.message || data.src || data.image || data.link || "";
                             
+                            // Nekos.best URLs often lack extensions natively, so we whitelist them if valid.
                             if (u && (filter(u) || src.indexOf("nekos.best") > -1)) return u;
                             return attempt(index + 1);
                         });
@@ -114,13 +115,12 @@
                     .catch(function() { return attempt(index + 1); });
             }
 
-            // Execution Path 2: Subreddit Routing Engine
             var sub = src.replace("meme-api:", "");
             return fetch("https://meme-api.com/gimme/" + sub)
                 .then(function(r) {
                     if (!r.ok) return attempt(index + 1);
                     return r.json().then(function(d) {
-                        if (d && d.url && (filter(d.url) || !wantVideo)) {
+                        if (d && d.url && filter(d.url)) {
                             if (cat === "sfw" && d.nsfw) return attempt(index + 1);
                             return d.url;
                         }
@@ -174,33 +174,6 @@
     // ── Commands Operational Engine ───────────────────────────────────────────────
     var unregFns=[], activeGuesses={};
 
-    // Diagnostics Pipeline
-    unregFns.push(registerCommand({
-        name:"ftest", untranslatedName:"ftest",
-        description:"VPN Path Check: Verifies alternative endpoints",
-        execute:function(args,ctx){
-            var cid=getChannelId(ctx);
-            try { MA.sendBotMessage(cid, "⚙️ Verification suite active. Sampling alternative paths..."); } catch(e){}
-            
-            fetch("https://api.github.com/zen")
-                .then(function(r) { return r.text(); })
-                .then(function(t) { try { MA.sendBotMessage(cid, "✅ GitHub Node: Connected ("+t+")"); } catch(e){} })
-                .catch(function(err) { try { MA.sendBotMessage(cid, "❌ GitHub Node Blocked: " + err.message); } catch(e){} });
-
-            fetch("https://nekos.best/api/v2/femboy")
-                .then(function(r) { return r.json(); })
-                .then(function(d) { try { MA.sendBotMessage(cid, "✅ Nekos.Best Node: Connected! Asset found."); } catch(e){} })
-                .catch(function(err) { try { MA.sendBotMessage(cid, "❌ Nekos.Best Node Blocked: " + err.message); } catch(e){} });
-
-            fetch("https://meme-api.com/gimme/femboymemes")
-                .then(function(r) { return r.json(); })
-                .then(function(d) { try { MA.sendBotMessage(cid, "✅ Reddit CDN Proxy Node: Connected!"); } catch(e){} })
-                .catch(function(err) { try { MA.sendBotMessage(cid, "❌ Reddit CDN Proxy Node Blocked: " + err.message); } catch(e){} });
-
-            return { content: "⏳ Auditing network interface route switches..." };
-        }
-    }));
-
     var combos=[["femboy","sfw"],["femboy","nsfw"],["tomboy","sfw"],["tomboy","nsfw"]];
     
     combos.forEach(function(pair){
@@ -213,23 +186,20 @@
             execute:function(args,ctx){
                 var cid=getChannelId(ctx);
                 
-                fetchMedia(type,cat,false).then(function(url){
+                // IMPORTANT: Returning the Promise keeps the Discord execution thread alive
+                // until the network request officially resolves.
+                return fetchMedia(type,cat,false).then(function(url){
                     if (!url) {
-                        try { MA.sendBotMessage(cid, "❌ Global Fetch Failure: All accessible endpoints returned empty records under your current VPN layer."); } catch(e){}
-                        return;
+                        try { MA.sendBotMessage(cid, "❌ Global Fetch Failure: All accessible endpoints returned empty records."); } catch(e){}
+                        return; // Returning void prevents a blank public message
                     }
                     
-                    // Dispatches directly to server database. Everyone in channel sees this.
-                    try { 
-                        MA.sendMessage(cid, { content: url, nonce: Date.now().toString(), tts: false }); 
-                    } catch(e) {
-                        try { MA.sendBotMessage(cid, "❌ Client Core Blocked Public Send. Local fallback asset:\n" + url); } catch(e){}
-                    }
+                    // Resolving with an object structured like this instructs Vendetta
+                    // to natively dispatch the message publicly as your user account.
+                    return { content: url };
                 }).catch(function(err){
                     try { MA.sendBotMessage(cid, "❌ Exception processing background worker: " + err.message); } catch(e){}
                 });
-                
-                return { content: "⚡ Fetching from open routes..." };
             }
         }));
 
@@ -240,21 +210,15 @@
             execute:function(args,ctx){
                 var cid=getChannelId(ctx);
                 
-                fetchMedia(type,cat,true).then(function(url){
+                return fetchMedia(type,cat,true).then(function(url){
                     if (!url) {
                         try { MA.sendBotMessage(cid, "❌ Global Fetch Failure: No format match found on non-blocked routes."); } catch(e){}
                         return;
                     }
-                    try { 
-                        MA.sendMessage(cid, { content: url, nonce: Date.now().toString(), tts: false }); 
-                    } catch(e) {
-                        try { MA.sendBotMessage(cid, "❌ Client Core Blocked Public Send. Local fallback asset:\n" + url); } catch(e){}
-                    }
+                    return { content: url };
                 }).catch(function(err){
                     try { MA.sendBotMessage(cid, "❌ Exception processing background worker: " + err.message); } catch(e){}
                 });
-                
-                return { content: "⚡ Fetching video asset from open routes..." };
             }
         }));
     });
@@ -267,20 +231,17 @@
             var cid=getChannelId(ctx);
             var type=Math.random()>0.5?"femboy":"tomboy";
             
-            fetchMedia(type,"sfw",false).then(function(url){
+            return fetchMedia(type,"sfw",false).then(function(url){
                 if (!url) {
                     try { MA.sendBotMessage(cid, "❌ Setup Failed: Could not gather valid game asset over network."); } catch(e){}
                     return;
                 }
                 activeGuesses[cid]=type;
                 var msg = "📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n"+url;
-                try { MA.sendMessage(cid, { content: msg, nonce: Date.now().toString(), tts: false }); } catch(e) {
-                    try { MA.sendBotMessage(cid, "⚠️ Game hosted locally due to API dispatch error:\n" + msg); } catch(e){}
-                }
+                return { content: msg };
             }).catch(function(err){
                 try { MA.sendBotMessage(cid, "❌ Game Crash: " + err.message); } catch(e){}
             });
-            return { content: "🎲 Initializing game sequence..." };
         }
     }));
 
@@ -307,10 +268,7 @@
                 delete activeGuesses[cid];
             }
             
-            try { MA.sendMessage(cid, { content: result, nonce: Date.now().toString(), tts: false }); } catch(e) {
-                try { MA.sendBotMessage(cid, result); } catch(e){}
-            }
-            return { content: "🎯 Processing score..." };
+            return { content: result };
         }
     }));
 
@@ -321,3 +279,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
+                                
