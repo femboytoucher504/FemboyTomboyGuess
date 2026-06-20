@@ -339,4 +339,18 @@
                 var cid = getChannelId(ctx), correct = activeGuesses[cid];
                 if (!correct) { sendPrivate(cid, "❌ No active game. Use /guess to start one."); return; }
                 var guess = args && args[0] && args[0].value, won = guess === correct;
-                send(cid, won ? "✅ **Correct!*
+                send(cid, won ? "✅ **Correct!** It was a **"+correct+"**!" : "❌ **Wrong!** It was a **"+correct+"**, not a "+guess+"!");
+                delete activeGuesses[cid];
+            }
+        }));
+    };
+
+    exports.onUnload = function() {
+        for (var i = 0; i < unregFns.length; i++) try { unregFns[i](); } catch(e) {}
+        unregFns = [];
+        activeGuesses = {};
+        recentUrls = {};
+    };
+
+    return exports;
+})({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
