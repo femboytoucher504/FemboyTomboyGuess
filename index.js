@@ -47,10 +47,12 @@
     }
 
     // ── Sources ───────────────────────────────────────────────────────────────────
+    // NOTE: nekos.best has no "femboy"/"tomboy" category — using closest valid
+    // generic categories (waifu/neko) as filler, not perfectly on-theme.
     var DEFAULT_SOURCES = {
         sfw: {
-            femboy: ["https://nekos.best/api/v2/femboy", "https://api.waifu.pics/sfw/waifu", "https://api.waifu.pics/sfw/shinobu"],
-            tomboy: ["https://nekos.best/api/v2/tomboy", "https://api.waifu.pics/sfw/neko"]
+            femboy: ["https://nekos.best/api/v2/waifu", "https://api.waifu.pics/sfw/waifu", "https://api.waifu.pics/sfw/shinobu"],
+            tomboy: ["https://nekos.best/api/v2/neko", "https://api.waifu.pics/sfw/neko"]
         },
         nsfw: {
             femboy: ["https://api.waifu.pics/nsfw/waifu"],
@@ -242,6 +244,45 @@
             name: "ftest", untranslatedName: "ftest",
             description: "Debug: proves plugin works",
             execute: function(args, ctx) { send(getChannelId(ctx), "✅ Plugin is working!"); }
+        }));
+
+        // Tests which external domains are reachable through your VPN/network.
+        // Results are private (only you see them).
+        unregFns.push(registerCommand({
+            name: "nettest", untranslatedName: "nettest",
+            description: "Debug: checks which image-source domains your network can reach",
+            execute: function(args, ctx) {
+                var cid = getChannelId(ctx);
+                sendPrivate(cid, "⏳ Testing domains, results coming one by one...");
+                var domains = [
+                    ["api.waifu.pics", "https://api.waifu.pics/sfw/waifu"],
+                    ["meme-api.com",   "https://meme-api.com/gimme/aww"],
+                    ["nekos.best",     "https://nekos.best/api/v2/neko"],
+                    ["nekos.life",     "https://nekos.life/api/v2/img/neko"],
+                    ["i.redd.it",      "https://i.redd.it/4xy.jpg"],
+                    ["discord.com",    "https://discord.com/api/v9/gateway"],
+                    ["github raw",     "https://raw.githubusercontent.com"]
+                ];
+                domains.forEach(function(pair) {
+                    var label = pair[0], url = pair[1];
+                    var timedOut = false;
+                    var timer = setTimeout(function() {
+                        timedOut = true;
+                        sendPrivate(cid, "⏱️ " + label + ": timed out (8s)");
+                    }, 8000);
+                    fetch(cacheBust(url), { headers: { "User-Agent": "RevengePlugin/1.0" } })
+                        .then(function(r) {
+                            if (timedOut) return;
+                            clearTimeout(timer);
+                            sendPrivate(cid, "✅ " + label + ": reachable (HTTP " + r.status + ")");
+                        })
+                        .catch(function(err) {
+                            if (timedOut) return;
+                            clearTimeout(timer);
+                            sendPrivate(cid, "❌ " + label + ": " + (err && err.message || "failed"));
+                        });
+                });
+            }
         }));
 
         var combos = [["femboy","sfw"],["femboy","nsfw"],["tomboy","sfw"],["tomboy","nsfw"]];
