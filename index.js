@@ -18,6 +18,12 @@
         try { MA.sendBotMessage(cid, text); } catch(e) {}
     }
 
+    // Forces a fresh response instead of a cached one — fixes repeated images
+    function cacheBust(url) {
+        var sep = url.indexOf("?") > -1 ? "&" : "?";
+        return url + sep + "_cb=" + Date.now() + Math.floor(Math.random() * 100000);
+    }
+
     // ── Sources ───────────────────────────────────────────────────────────────────
     var DEFAULT_SOURCES = {
         sfw: {
@@ -69,7 +75,7 @@
             if (i >= 10) return Promise.resolve(null);
             var src = sources[Math.floor(Math.random() * sources.length)];
             if (src.indexOf("http") === 0) {
-                return fetch(src, { headers: { "User-Agent": "RevengePlugin/1.0" } })
+                return fetch(cacheBust(src), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
                     .then(function(res) {
                         if (!res.ok) return attempt(i + 1);
                         var ct = res.headers.get("content-type") || "";
@@ -82,7 +88,7 @@
                         });
                     }).catch(function() { return attempt(i + 1); });
             }
-            return fetch("https://meme-api.com/gimme/" + src, { headers: { "User-Agent": "RevengePlugin/1.0" } })
+            return fetch(cacheBust("https://meme-api.com/gimme/" + src), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
                 .then(function(r) {
                     if (!r.ok) return attempt(i + 1);
                     return r.json().then(function(d) {
@@ -119,7 +125,7 @@
         var filter = kind === "video" ? isVideo : kind === "image" ? isImage : isAny;
         function attempt(i) {
             if (i >= 8) return Promise.resolve(null);
-            return fetch("https://meme-api.com/gimme/" + sub, { headers: { "User-Agent": "RevengePlugin/1.0" } })
+            return fetch(cacheBust("https://meme-api.com/gimme/" + sub), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
                 .then(function(r) {
                     if (!r.ok) return attempt(i + 1);
                     return r.json().then(function(d) {
@@ -301,4 +307,4 @@
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-        
+                         
