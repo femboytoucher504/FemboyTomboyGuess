@@ -13,15 +13,37 @@
         return null;
     }
 
+    // Public message — everyone in the channel sees this
     function send(cid, text) {
         try { MA.sendMessage(cid, { content: String(text), tts: false }, null, { nonce: Date.now().toString() }); return; } catch(e) {}
         try { MA.sendBotMessage(cid, text); } catch(e) {}
     }
 
-    // Forces a fresh response instead of a cached one — fixes repeated images
+    // Private message — only you see this (shows as "Only you can see this")
+    function sendPrivate(cid, text) {
+        try { MA.sendBotMessage(cid, String(text)); } catch(e) {}
+    }
+
     function cacheBust(url) {
         var sep = url.indexOf("?") > -1 ? "&" : "?";
         return url + sep + "_cb=" + Date.now() + Math.floor(Math.random() * 100000);
+    }
+
+    function labelFor(src) {
+        if (src.indexOf("http") === 0) {
+            var m = src.match(/^https?:\/\/([^\/]+)/);
+            return m ? m[1] : src;
+        }
+        return "r/" + src + " (meme-api.com)";
+    }
+
+    function shuffle(arr) {
+        var a = arr.slice();
+        for (var i = a.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+        }
+        return a;
     }
 
     // ── Sources ───────────────────────────────────────────────────────────────────
@@ -47,7 +69,6 @@
     if (!storage.customSources) storage.customSources = { sfw:{ femboy:[], tomboy:[] }, nsfw:{ femboy:[], tomboy:[] } };
     if (!storage.enabledPacks)  storage.enabledPacks  = [];
 
-    // Treat gif/gifv as "video" too since actual mp4s are rare from these APIs
     var isImage = function(u) { return /\.(jpg|jpeg|png|webp)(\?.*)?$/i.test(u); };
     var isVideo = function(u) { return /\.(mp4|webm|gifv|gif)(\?.*)?$/i.test(u); };
     var isAny   = function() { return true; };
@@ -67,72 +88,86 @@
         return out;
     }
 
+    // Returns { url, source, log } — tries every configured source ONCE in random
+    // order (no repeats within a call), instead of picking randomly WITH replacement
+    // which kept hitting the same 2-3 reliable sources over and over.
     function fetchMedia(type, cat, wantVideo) {
         var filter = wantVideo ? isVideo : isImage;
-        var sources = buildSources(type, cat);
-        if (!sources.length) return Promise.resolve(null);
-        function attempt(i) {
-            if (i >= 10) return Promise.resolve(null);
-            var src = sources[Math.floor(Math.random() * sources.length)];
+        var sources = shuffle(buildSources(type, cat));
+        var log = [];
+        if (!sources.length) return Promise.resolve({ url: null, source: null, log: ["no sources configured"] });
+
+        function attempt(idx) {
+            if (idx >= sources.length) return Promise.resolve({ url: null, source: null, log: log });
+            var src = sources[idx];
+            var label = labelFor(src);
+
             if (src.indexOf("http") === 0) {
                 return fetch(cacheBust(src), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
                     .then(function(res) {
-                        if (!res.ok) return attempt(i + 1);
+                        if (!res.ok) { log.push(label + ": HTTP " + res.status); return attempt(idx + 1); }
                         var ct = res.headers.get("content-type") || "";
-                        if (ct.indexOf("image/") > -1 || ct.indexOf("video/") > -1) return filter(src) ? src : attempt(i + 1);
+                        if (ct.indexOf("image/") > -1 || ct.indexOf("video/") > -1) {
+                            if (filter(src)) return { url: src, source: label, log: log };
+                            log.push(label + ": wrong media type"); return attempt(idx + 1);
+                        }
                         return res.json().then(function(d) {
                             var u = (d.results && d.results[0] && d.results[0].url) ||
                                      d.url || d.file || d.message || d.src || d.image || "";
-                            if (u && (filter(u) || u.indexOf("nekos.best") > -1)) return u;
-                            return attempt(i + 1);
+                            if (u && (filter(u) || u.indexOf("nekos.best") > -1)) return { url: u, source: label, log: log };
+                            log.push(label + ": no matching url in response");
+                            return attempt(idx + 1);
                         });
-                    }).catch(function() { return attempt(i + 1); });
+                    }).catch(function(err) { log.push(label + ": " + (err && err.message || "fetch error")); return attempt(idx + 1); });
             }
+
             return fetch(cacheBust("https://meme-api.com/gimme/" + src), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
                 .then(function(r) {
-                    if (!r.ok) return attempt(i + 1);
+                    if (!r.ok) { log.push(label + ": HTTP " + r.status); return attempt(idx + 1); }
                     return r.json().then(function(d) {
-                        if (!d || !d.url || !filter(d.url)) return attempt(i + 1);
-                        if (cat === "sfw" && d.nsfw) return attempt(i + 1);
-                        return d.url;
+                        if (!d || !d.url) { log.push(label + ": empty response"); return attempt(idx + 1); }
+                        if (!filter(d.url)) { log.push(label + ": " + d.url + " didn't match media type"); return attempt(idx + 1); }
+                        if (cat === "sfw" && d.nsfw) { log.push(label + ": post was nsfw-flagged, skipped"); return attempt(idx + 1); }
+                        return { url: d.url, source: label, log: log };
                     });
-                }).catch(function() { return attempt(i + 1); });
+                }).catch(function(err) { log.push(label + ": " + (err && err.message || "fetch error")); return attempt(idx + 1); });
         }
         return attempt(0);
     }
 
-    // Avoid repeating the same image back-to-back — keeps last 15 per category
     var recentUrls = {};
     function fetchMediaDedup(type, cat, wantVideo) {
         var key = type + ":" + cat + ":" + (wantVideo ? "v" : "i");
         if (!recentUrls[key]) recentUrls[key] = [];
         function tryFetch(retries) {
-            return fetchMedia(type, cat, wantVideo).then(function(url) {
-                if (!url) return null;
-                if (retries <= 0 || recentUrls[key].indexOf(url) === -1) {
-                    recentUrls[key].push(url);
+            return fetchMedia(type, cat, wantVideo).then(function(result) {
+                if (!result.url) return result;
+                if (retries <= 0 || recentUrls[key].indexOf(result.url) === -1) {
+                    recentUrls[key].push(result.url);
                     if (recentUrls[key].length > 15) recentUrls[key].shift();
-                    return url;
+                    return result;
                 }
                 return tryFetch(retries - 1);
             });
         }
-        return tryFetch(4);
+        return tryFetch(2);
     }
 
-    // Direct pull from a specific subreddit the user names, ignoring packs/filters
+    // Direct pull from one named subreddit, with debug log on failure
     function fetchFromSubreddit(sub, kind) {
         var filter = kind === "video" ? isVideo : kind === "image" ? isImage : isAny;
+        var log = [];
         function attempt(i) {
-            if (i >= 8) return Promise.resolve(null);
+            if (i >= 8) return Promise.resolve({ url: null, log: log });
             return fetch(cacheBust("https://meme-api.com/gimme/" + sub), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
                 .then(function(r) {
-                    if (!r.ok) return attempt(i + 1);
+                    if (!r.ok) { log.push("HTTP " + r.status + " from meme-api"); return attempt(i + 1); }
                     return r.json().then(function(d) {
-                        if (d && d.url && filter(d.url)) return d.url;
-                        return attempt(i + 1);
+                        if (!d || !d.url) { log.push("empty response (subreddit might not exist or has no posts)"); return attempt(i + 1); }
+                        if (!filter(d.url)) { log.push("got " + d.url + " — didn't match kind '" + kind + "'"); return attempt(i + 1); }
+                        return { url: d.url, log: log };
                     });
-                }).catch(function() { return attempt(i + 1); });
+                }).catch(function(err) { log.push("fetch error: " + (err && err.message)); return attempt(i + 1); });
         }
         return attempt(0);
     }
@@ -206,9 +241,7 @@
         unregFns.push(registerCommand({
             name: "ftest", untranslatedName: "ftest",
             description: "Debug: proves plugin works",
-            execute: function(args, ctx) {
-                send(getChannelId(ctx), "✅ Plugin is working!");
-            }
+            execute: function(args, ctx) { send(getChannelId(ctx), "✅ Plugin is working!"); }
         }));
 
         var combos = [["femboy","sfw"],["femboy","nsfw"],["tomboy","sfw"],["tomboy","nsfw"]];
@@ -220,8 +253,13 @@
                 description: "Send a "+cat.toUpperCase()+" "+type+" image",
                 execute: function(args, ctx) {
                     var cid = getChannelId(ctx);
-                    fetchMediaDedup(type, cat, false).then(function(url) {
-                        send(cid, url || "❌ All sources failed. Try again in a moment.");
+                    fetchMediaDedup(type, cat, false).then(function(result) {
+                        if (result.url) {
+                            send(cid, result.url);
+                            sendPrivate(cid, "📍 Source: " + result.source);
+                        } else {
+                            sendPrivate(cid, "❌ All sources failed.\n\nDebug:\n" + result.log.slice(0, 8).join("\n"));
+                        }
                     });
                 }
             }));
@@ -231,14 +269,18 @@
                 description: "Send a "+cat.toUpperCase()+" "+type+" video/gif",
                 execute: function(args, ctx) {
                     var cid = getChannelId(ctx);
-                    fetchMediaDedup(type, cat, true).then(function(url) {
-                        send(cid, url || "❌ No video/gif found. Try adding a gif-heavy subreddit as a custom source.");
+                    fetchMediaDedup(type, cat, true).then(function(result) {
+                        if (result.url) {
+                            send(cid, result.url);
+                            sendPrivate(cid, "📍 Source: " + result.source);
+                        } else {
+                            sendPrivate(cid, "❌ No video/gif found.\n\nDebug:\n" + result.log.slice(0, 8).join("\n"));
+                        }
                     });
                 }
             }));
         });
 
-        // ── NEW: pull directly from any subreddit you name, any media kind ────────
         unregFns.push(registerCommand({
             name: "fromsub", untranslatedName: "fromsub",
             description: "Pull media directly from a specific subreddit",
@@ -256,9 +298,14 @@
                 var cid = getChannelId(ctx);
                 var sub  = (args && args[0] && args[0].value || "").replace(/^r\//i, "").trim();
                 var kind = (args && args[1] && args[1].value) || "any";
-                if (!sub) { send(cid, "❌ You need to give a subreddit name."); return; }
-                fetchFromSubreddit(sub, kind).then(function(url) {
-                    send(cid, url || ("❌ Nothing found on r/" + sub + " matching '" + kind + "'. Try a different subreddit or kind."));
+                if (!sub) { sendPrivate(cid, "❌ You need to give a subreddit name."); return; }
+                fetchFromSubreddit(sub, kind).then(function(result) {
+                    if (result.url) {
+                        send(cid, result.url);
+                        sendPrivate(cid, "📍 Source: r/" + sub + " (meme-api.com)");
+                    } else {
+                        sendPrivate(cid, "❌ Nothing found on r/" + sub + " matching '" + kind + "'.\n\nDebug:\n" + result.log.slice(0, 8).join("\n"));
+                    }
                 });
             }
         }));
@@ -269,10 +316,10 @@
             execute: function(args, ctx) {
                 var cid = getChannelId(ctx);
                 var type = Math.random() > 0.5 ? "femboy" : "tomboy";
-                fetchMediaDedup(type, "sfw", false).then(function(url) {
-                    if (!url) { send(cid, "❌ Fetch failed. Try /femboy first."); return; }
+                fetchMediaDedup(type, "sfw", false).then(function(result) {
+                    if (!result.url) { sendPrivate(cid, "❌ Fetch failed.\n\nDebug:\n" + result.log.slice(0, 8).join("\n")); return; }
                     activeGuesses[cid] = type;
-                    send(cid, "📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n" + url);
+                    send(cid, "📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n" + result.url);
                 });
             }
         }));
@@ -290,21 +337,6 @@
             }],
             execute: function(args, ctx) {
                 var cid = getChannelId(ctx), correct = activeGuesses[cid];
-                if (!correct) { send(cid, "❌ No active game. Use /guess to start one."); return; }
+                if (!correct) { sendPrivate(cid, "❌ No active game. Use /guess to start one."); return; }
                 var guess = args && args[0] && args[0].value, won = guess === correct;
-                send(cid, won ? "✅ **Correct!** It was a **"+correct+"**!" : "❌ **Wrong!** It was a **"+correct+"**, not a "+guess+"!");
-                delete activeGuesses[cid];
-            }
-        }));
-    };
-
-    exports.onUnload = function() {
-        for (var i = 0; i < unregFns.length; i++) try { unregFns[i](); } catch(e) {}
-        unregFns = [];
-        activeGuesses = {};
-        recentUrls = {};
-    };
-
-    return exports;
-})({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                         
+                send(cid, won ? "✅ **Correct!*
