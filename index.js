@@ -34,7 +34,7 @@
             var m = src.match(/^https?:\/\/([^\/]+)/);
             return m ? m[1] : src;
         }
-        return "r/" + src + " (meme-api.com)";
+        return "r/" + src + " (reddit.com)";
     }
 
     function shuffle(arr) {
@@ -123,16 +123,11 @@
                     }).catch(function(err) { log.push(label + ": " + (err && err.message || "fetch error")); return attempt(idx + 1); });
             }
 
-            return fetch(cacheBust("https://meme-api.com/gimme/" + src), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
-                .then(function(r) {
-                    if (!r.ok) { log.push(label + ": HTTP " + r.status); return attempt(idx + 1); }
-                    return r.json().then(function(d) {
-                        if (!d || !d.url) { log.push(label + ": empty response"); return attempt(idx + 1); }
-                        if (!filter(d.url)) { log.push(label + ": " + d.url + " didn't match media type"); return attempt(idx + 1); }
-                        if (cat === "sfw" && d.nsfw) { log.push(label + ": post was nsfw-flagged, skipped"); return attempt(idx + 1); }
-                        return { url: d.url, source: label, log: log };
-                    });
-                }).catch(function(err) { log.push(label + ": " + (err && err.message || "fetch error")); return attempt(idx + 1); });
+            return fetchRedditPost(src, filter, cat === "sfw").then(function(result) {
+                if (result.url) return { url: result.url, source: label, log: log };
+                log.push(label + ": " + result.reason);
+                return attempt(idx + 1);
+            });
         }
         return attempt(0);
     }
@@ -155,21 +150,41 @@
         return tryFetch(2);
     }
 
+    // Fetches directly from Reddit's own JSON API instead of the third-party
+    // meme-api.com proxy, which has been returning HTTP 530 (server unreachable).
+    function fetchRedditPost(sub, filterFn, requireSfw) {
+        var url = "https://www.reddit.com/r/" + sub + "/hot.json?limit=50";
+        return fetch(cacheBust(url), { headers: { "User-Agent": "RevengePlugin/1.0 (by /u/anonymous)" } })
+            .then(function(res) {
+                if (!res.ok) return { url: null, reason: "HTTP " + res.status + " from reddit.com" };
+                return res.json().then(function(json) {
+                    var posts = (json && json.data && json.data.children) || [];
+                    var candidates = [];
+                    for (var i = 0; i < posts.length; i++) {
+                        var d = posts[i] && posts[i].data;
+                        if (!d || !d.url) continue;
+                        if (d.is_video) continue;
+                        if (requireSfw && d.over_18) continue;
+                        if (filterFn(d.url)) candidates.push(d.url);
+                    }
+                    if (!candidates.length) return { url: null, reason: "no matching posts found on r/" + sub };
+                    return { url: candidates[Math.floor(Math.random() * candidates.length)], reason: null };
+                });
+            })
+            .catch(function(err) { return { url: null, reason: (err && err.message) || "fetch error" }; });
+    }
+
     // Direct pull from one named subreddit, with debug log on failure
     function fetchFromSubreddit(sub, kind) {
         var filter = kind === "video" ? isVideo : kind === "image" ? isImage : isAny;
         var log = [];
         function attempt(i) {
-            if (i >= 8) return Promise.resolve({ url: null, log: log });
-            return fetch(cacheBust("https://meme-api.com/gimme/" + sub), { headers: { "User-Agent": "RevengePlugin/1.0", "Cache-Control": "no-cache" } })
-                .then(function(r) {
-                    if (!r.ok) { log.push("HTTP " + r.status + " from meme-api"); return attempt(i + 1); }
-                    return r.json().then(function(d) {
-                        if (!d || !d.url) { log.push("empty response (subreddit might not exist or has no posts)"); return attempt(i + 1); }
-                        if (!filter(d.url)) { log.push("got " + d.url + " — didn't match kind '" + kind + "'"); return attempt(i + 1); }
-                        return { url: d.url, log: log };
-                    });
-                }).catch(function(err) { log.push("fetch error: " + (err && err.message)); return attempt(i + 1); });
+            if (i >= 4) return Promise.resolve({ url: null, log: log });
+            return fetchRedditPost(sub, filter, false).then(function(result) {
+                if (result.url) return { url: result.url, log: log };
+                log.push(result.reason);
+                return attempt(i + 1);
+            });
         }
         return attempt(0);
     }
@@ -257,6 +272,7 @@
                 var domains = [
                     ["api.waifu.pics", "https://api.waifu.pics/sfw/waifu"],
                     ["meme-api.com",   "https://meme-api.com/gimme/aww"],
+                    ["www.reddit.com", "https://www.reddit.com/r/aww/hot.json?limit=1"],
                     ["nekos.best",     "https://nekos.best/api/v2/neko"],
                     ["nekos.life",     "https://nekos.life/api/v2/img/neko"],
                     ["i.redd.it",      "https://i.redd.it/4xy.jpg"],
@@ -343,7 +359,7 @@
                 fetchFromSubreddit(sub, kind).then(function(result) {
                     if (result.url) {
                         send(cid, result.url);
-                        sendPrivate(cid, "📍 Source: r/" + sub + " (meme-api.com)");
+                        sendPrivate(cid, "📍 Source: r/" + sub + " (reddit.com)");
                     } else {
                         sendPrivate(cid, "❌ Nothing found on r/" + sub + " matching '" + kind + "'.\n\nDebug:\n" + result.log.slice(0, 8).join("\n"));
                     }
