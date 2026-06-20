@@ -9,7 +9,6 @@
     function getChannelId(ctx) {
         try { if (ctx && ctx.channel && ctx.channel.id) return ctx.channel.id; } catch(e) {}
         try { if (ctx && ctx.channelId) return ctx.channelId; } catch(e) {}
-        try { if (ctx && typeof ctx.channel === "string") return ctx.channel; } catch(e) {}
         try { return ChannelStore.getLastSelectedChannelId(); } catch(e) {}
         return null;
     }
@@ -19,17 +18,11 @@
         try { MA.sendBotMessage(cid, text); } catch(e) {}
     }
 
+    // ── Sources ───────────────────────────────────────────────────────────────────
     var DEFAULT_SOURCES = {
         sfw: {
-            femboy: [
-                "https://nekos.best/api/v2/femboy",
-                "https://api.waifu.pics/sfw/waifu",
-                "https://api.waifu.pics/sfw/shinobu"
-            ],
-            tomboy: [
-                "https://nekos.best/api/v2/tomboy",
-                "https://api.waifu.pics/sfw/neko"
-            ]
+            femboy: ["https://nekos.best/api/v2/femboy", "https://api.waifu.pics/sfw/waifu", "https://api.waifu.pics/sfw/shinobu"],
+            tomboy: ["https://nekos.best/api/v2/tomboy", "https://api.waifu.pics/sfw/neko"]
         },
         nsfw: {
             femboy: ["https://api.waifu.pics/nsfw/waifu"],
@@ -48,8 +41,10 @@
     if (!storage.customSources) storage.customSources = { sfw:{ femboy:[], tomboy:[] }, nsfw:{ femboy:[], tomboy:[] } };
     if (!storage.enabledPacks)  storage.enabledPacks  = [];
 
-    var isImage = function(u) { return /\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(u); };
-    var isVideo = function(u) { return /\.(mp4|webm)(\?.*)?$/i.test(u); };
+    // Treat gif/gifv as "video" too since actual mp4s are rare from these APIs
+    var isImage = function(u) { return /\.(jpg|jpeg|png|webp)(\?.*)?$/i.test(u); };
+    var isVideo = function(u) { return /\.(mp4|webm|gifv|gif)(\?.*)?$/i.test(u); };
+    var isAny   = function() { return true; };
 
     function buildSources(type, cat) {
         var out = [], def = DEFAULT_SOURCES[cat] && DEFAULT_SOURCES[cat][type];
@@ -82,7 +77,6 @@
                         return res.json().then(function(d) {
                             var u = (d.results && d.results[0] && d.results[0].url) ||
                                      d.url || d.file || d.message || d.src || d.image || "";
-                            // nekos.best returns webp images — accept them even without extension check
                             if (u && (filter(u) || u.indexOf("nekos.best") > -1)) return u;
                             return attempt(i + 1);
                         });
@@ -95,6 +89,42 @@
                         if (!d || !d.url || !filter(d.url)) return attempt(i + 1);
                         if (cat === "sfw" && d.nsfw) return attempt(i + 1);
                         return d.url;
+                    });
+                }).catch(function() { return attempt(i + 1); });
+        }
+        return attempt(0);
+    }
+
+    // Avoid repeating the same image back-to-back — keeps last 15 per category
+    var recentUrls = {};
+    function fetchMediaDedup(type, cat, wantVideo) {
+        var key = type + ":" + cat + ":" + (wantVideo ? "v" : "i");
+        if (!recentUrls[key]) recentUrls[key] = [];
+        function tryFetch(retries) {
+            return fetchMedia(type, cat, wantVideo).then(function(url) {
+                if (!url) return null;
+                if (retries <= 0 || recentUrls[key].indexOf(url) === -1) {
+                    recentUrls[key].push(url);
+                    if (recentUrls[key].length > 15) recentUrls[key].shift();
+                    return url;
+                }
+                return tryFetch(retries - 1);
+            });
+        }
+        return tryFetch(4);
+    }
+
+    // Direct pull from a specific subreddit the user names, ignoring packs/filters
+    function fetchFromSubreddit(sub, kind) {
+        var filter = kind === "video" ? isVideo : kind === "image" ? isImage : isAny;
+        function attempt(i) {
+            if (i >= 8) return Promise.resolve(null);
+            return fetch("https://meme-api.com/gimme/" + sub, { headers: { "User-Agent": "RevengePlugin/1.0" } })
+                .then(function(r) {
+                    if (!r.ok) return attempt(i + 1);
+                    return r.json().then(function(d) {
+                        if (d && d.url && filter(d.url)) return d.url;
+                        return attempt(i + 1);
                     });
                 }).catch(function() { return attempt(i + 1); });
         }
@@ -122,7 +152,7 @@
                 Pill("✏️ Custom", tab==="custom", function(){setTab("custom");})
             ),
             tab==="packs" && e(V, null,
-                e(T, {style:{color:"#aaa",marginBottom:12,fontSize:13}}, "Waifu.pics SFW always on. Enable extras here."),
+                e(T, {style:{color:"#aaa",marginBottom:12,fontSize:13}}, "Nekos.best + Waifu.pics always on. Enable extras here."),
                 PRESET_PACKS.map(function(pack) {
                     var on = epacks.indexOf(pack.id) > -1;
                     return e(TO, { key:pack.id, onPress:function() { var i=storage.enabledPacks.indexOf(pack.id); if(i>-1) storage.enabledPacks.splice(i,1); else storage.enabledPacks.push(pack.id); refresh(); },
@@ -140,7 +170,7 @@
                 e(V, {style:{flexDirection:"row",marginBottom:12}},
                     Pill("Femboy", typ==="femboy", function(){setTyp("femboy");}, 8),
                     Pill("Tomboy", typ==="tomboy", function(){setTyp("tomboy");})),
-                e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Subreddit name OR full URL"),
+                e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Subreddit name (no r/) OR full URL"),
                 e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
                     placeholder:"subreddit or https://...", placeholderTextColor:"#555",
                     value:inp, onChangeText:setInp, autoCapitalize:"none", autoCorrect:false }),
@@ -160,9 +190,7 @@
         );
     };
 
-    // ── onLoad — commands registered HERE not in IIFE body ────────────────────────
-    // Revenge calls onLoad() after the module is fully set up.
-    // Registering commands in the IIFE body is too early — the registry isn't ready.
+    // ── onLoad ────────────────────────────────────────────────────────────────────
     var unregFns = [];
     var activeGuesses = {};
 
@@ -171,11 +199,9 @@
 
         unregFns.push(registerCommand({
             name: "ftest", untranslatedName: "ftest",
-            description: "Debug: proves plugin and commands work",
+            description: "Debug: proves plugin works",
             execute: function(args, ctx) {
-                var cid = getChannelId(ctx);
-                send(cid, "✅ FemboyTomboyGuess is working! Channel: " + cid);
-                return { content: "✅ return content also works!" };
+                send(getChannelId(ctx), "✅ Plugin is working!");
             }
         }));
 
@@ -188,23 +214,48 @@
                 description: "Send a "+cat.toUpperCase()+" "+type+" image",
                 execute: function(args, ctx) {
                     var cid = getChannelId(ctx);
-                    fetchMedia(type, cat, false).then(function(url) {
-                        send(cid, url || "❌ All sources failed. Check your internet.");
+                    fetchMediaDedup(type, cat, false).then(function(url) {
+                        send(cid, url || "❌ All sources failed. Try again in a moment.");
                     });
                 }
             }));
 
             unregFns.push(registerCommand({
                 name: name+"_video", untranslatedName: name+"_video",
-                description: "Send a "+cat.toUpperCase()+" "+type+" video",
+                description: "Send a "+cat.toUpperCase()+" "+type+" video/gif",
                 execute: function(args, ctx) {
                     var cid = getChannelId(ctx);
-                    fetchMedia(type, cat, true).then(function(url) {
-                        send(cid, url || "❌ No video found.");
+                    fetchMediaDedup(type, cat, true).then(function(url) {
+                        send(cid, url || "❌ No video/gif found. Try adding a gif-heavy subreddit as a custom source.");
                     });
                 }
             }));
         });
+
+        // ── NEW: pull directly from any subreddit you name, any media kind ────────
+        unregFns.push(registerCommand({
+            name: "fromsub", untranslatedName: "fromsub",
+            description: "Pull media directly from a specific subreddit",
+            options: [
+                { name:"subreddit", displayName:"subreddit", description:"e.g. femboyfun (no r/)", type:3, required:true },
+                { name:"kind", displayName:"kind", description:"Type of media", type:3, required:false,
+                    choices:[
+                        { name:"image", displayName:"image", value:"image" },
+                        { name:"video/gif", displayName:"video/gif", value:"video" },
+                        { name:"any", displayName:"any", value:"any" }
+                    ]
+                }
+            ],
+            execute: function(args, ctx) {
+                var cid = getChannelId(ctx);
+                var sub  = (args && args[0] && args[0].value || "").replace(/^r\//i, "").trim();
+                var kind = (args && args[1] && args[1].value) || "any";
+                if (!sub) { send(cid, "❌ You need to give a subreddit name."); return; }
+                fetchFromSubreddit(sub, kind).then(function(url) {
+                    send(cid, url || ("❌ Nothing found on r/" + sub + " matching '" + kind + "'. Try a different subreddit or kind."));
+                });
+            }
+        }));
 
         unregFns.push(registerCommand({
             name: "guess", untranslatedName: "guess",
@@ -212,7 +263,7 @@
             execute: function(args, ctx) {
                 var cid = getChannelId(ctx);
                 var type = Math.random() > 0.5 ? "femboy" : "tomboy";
-                fetchMedia(type, "sfw", false).then(function(url) {
+                fetchMediaDedup(type, "sfw", false).then(function(url) {
                     if (!url) { send(cid, "❌ Fetch failed. Try /femboy first."); return; }
                     activeGuesses[cid] = type;
                     send(cid, "📸 **Femboy or Tomboy?**\nUse `/answer` to submit your guess!\n\n" + url);
@@ -224,11 +275,11 @@
             name: "answer", untranslatedName: "answer",
             description: "Submit your guess for the current /guess game",
             options: [{
-                name: "choice", displayName: "choice", description: "Your guess",
-                type: 3, required: true,
-                choices: [
-                    { name: "femboy", displayName: "femboy", value: "femboy" },
-                    { name: "tomboy", displayName: "tomboy", value: "tomboy" }
+                name:"choice", displayName:"choice", description:"Your guess",
+                type:3, required:true,
+                choices:[
+                    { name:"femboy", displayName:"femboy", value:"femboy" },
+                    { name:"tomboy", displayName:"tomboy", value:"tomboy" }
                 ]
             }],
             execute: function(args, ctx) {
@@ -245,8 +296,9 @@
         for (var i = 0; i < unregFns.length; i++) try { unregFns[i](); } catch(e) {}
         unregFns = [];
         activeGuesses = {};
+        recentUrls = {};
     };
 
     return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-            
+        
