@@ -27,27 +27,13 @@ function cacheBust(url) {
     return url + sep + "_cb=" + Date.now() + Math.floor(Math.random() * 100000);
 }
 
-// Pure-JS base64 encode — Hermes has no built-in btoa
-function base64Encode(str) {
-    var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-    var output = "", i = 0;
-    while (i < str.length) {
-        var c1 = str.charCodeAt(i++), c2 = str.charCodeAt(i++), c3 = str.charCodeAt(i++);
-        var e1 = c1 >> 2;
-        var e2 = ((c1 & 3) << 4) | (isNaN(c2) ? 0 : c2 >> 4);
-        var e3 = isNaN(c2) ? 64 : (((c2 & 15) << 2) | (c3 >> 6));
-        var e4 = isNaN(c3) ? 64 : (c3 & 63);
-        output += chars.charAt(e1) + chars.charAt(e2) + chars.charAt(e3) + chars.charAt(e4);
-    }
-    return output;
-}
-
 function labelFor(src) {
     if (src.indexOf("http") === 0) {
         var m = src.match(/^https?:\/\/([^\/]+)/);
         return m ? m[1] : src;
     }
-    return "r/" + src + " (reddit.com)";}
+    return "r/" + src + " (reddit.com)";
+}
 
 function shuffle(arr) {
     var a = arr.slice();
@@ -58,102 +44,59 @@ function shuffle(arr) {
     return a;
 }
 
-// ── Reddit OAuth (installed-app, client-id only, no secret) ──────────────────
+// ── Reddit Public API (NO AUTH REQUIRED!) ────────────────────────────────────
 var REDDIT_UA = "android:com.femboytomboyguess.plugin:v1.0 (by /u/anonymous)";
 
-function fetchRedditToken(clientId) {
-    var body = "grant_type=" + encodeURIComponent("https://oauth.reddit.com/grants/installed_client") +
-               "&device_id=" + encodeURIComponent("DO_NOT_TRACK_THIS_DEVICE");
-    return fetch("https://www.reddit.com/api/v1/access_token", {
-        method: "POST",
-        headers: {
-            "Authorization": "Basic " + base64Encode(clientId + ":"),
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": REDDIT_UA
-        },
-        body: body
-    }).then(function(res) {
-        if (!res.ok) throw new Error("Token request failed: HTTP " + res.status);
-        return res.json();
-    }).then(function(json) {
-        if (!json || !json.access_token) throw new Error("No access_token in response");
-        storage.redditToken = json.access_token;
-        storage.redditTokenExpiry = Date.now() + ((json.expires_in || 3600) * 1000);
-        return json.access_token;
-    });
-}
-
-function getRedditToken() {
-    var now = Date.now();
-    if (storage.redditToken && storage.redditTokenExpiry && now < storage.redditTokenExpiry - 60000) {
-        return Promise.resolve(storage.redditToken);
-    }
-    var clientId = storage.redditClientId;
-    if (!clientId) return Promise.resolve(null);
-    return fetchRedditToken(clientId).catch(function() { return null; });
-}
-
-function fetchRedditPost(sub, filterFn, requireSfw) {
-    return getRedditToken().then(function(token) {
-        if (!token) return { url: null, reason: "No Reddit Client ID set. Add one in plugin settings → 🔑 Reddit tab." };
-        var url = "https://oauth.reddit.com/r/" + sub + "/hot?limit=50";        return fetch(cacheBust(url), { headers: { "Authorization": "Bearer " + token, "User-Agent": REDDIT_UA } })
-            .then(function(res) {
-                if (res.status === 401) {
-                    storage.redditToken = null; storage.redditTokenExpiry = null;
-                    return { url: null, reason: "Reddit token expired, try again" };
+function fetchRedditPost(sub, filterFn, requireSfw) {    var url = "https://www.reddit.com/r/" + sub + "/hot.json?limit=50";
+    return fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
+        .then(function(res) {
+            if (!res.ok) return { url: null, reason: "HTTP " + res.status + " from reddit.com" };
+            return res.json().then(function(json) {
+                var posts = (json && json.data && json.data.children) || [];
+                var candidates = [];
+                for (var i = 0; i < posts.length; i++) {
+                    var d = posts[i] && posts[i].data;
+                    if (!d || !d.url) continue;
+                    if (d.is_video) continue;
+                    if (requireSfw && d.over_18) continue;
+                    if (filterFn(d.url)) candidates.push(d.url);
                 }
-                if (!res.ok) return { url: null, reason: "HTTP " + res.status + " from oauth.reddit.com" };
-                return res.json().then(function(json) {
-                    var posts = (json && json.data && json.data.children) || [];
-                    var candidates = [];
-                    for (var i = 0; i < posts.length; i++) {
-                        var d = posts[i] && posts[i].data;
-                        if (!d || !d.url) continue;
-                        if (d.is_video) continue;
-                        if (requireSfw && d.over_18) continue;
-                        if (filterFn(d.url)) candidates.push(d.url);
-                    }
-                    if (!candidates.length) return { url: null, reason: "no matching posts found on r/" + sub };
-                    return { url: candidates[Math.floor(Math.random() * candidates.length)], reason: null };
-                });
-            }).catch(function(err) { return { url: null, reason: (err && err.message) || "fetch error" }; });
-    });
+                if (!candidates.length) return { url: null, reason: "no matching posts found on r/" + sub };
+                return { url: candidates[Math.floor(Math.random() * candidates.length)], reason: null };
+            });
+        }).catch(function(err) { return { url: null, reason: (err && err.message) || "fetch error" }; });
 }
 
-// ── NEW: Reddit Subreddit Search ─────────────────────────────────────────────
+// ── NEW: Reddit Subreddit Search (Public API) ───────────────────────────────
 function searchRedditSubreddits(query) {
-    return getRedditToken().then(function(token) {
-        if (!token) return { subs: [], reason: "No Reddit Client ID set." };
-        var url = "https://oauth.reddit.com/subreddits/search?q=" + encodeURIComponent(query) + "&limit=10";
-        return fetch(cacheBust(url), { headers: { "Authorization": "Bearer " + token, "User-Agent": REDDIT_UA } })
-            .then(function(res) { return res.json(); })
-            .then(function(json) {
-                var children = (json && json.data && json.data.children) || [];
-                var subs = children.map(function(c) {
-                    return { name: c.data.display_name, subs: c.data.subscribers };
-                });
-                return { subs: subs, reason: null };
+    var url = "https://www.reddit.com/subreddits/search.json?q=" + encodeURIComponent(query) + "&limit=10";
+    return fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
+        .then(function(res) { return res.json(); })
+        .then(function(json) {
+            var children = (json && json.data && json.data.children) || [];
+            var subs = children.map(function(c) {
+                return { name: c.data.display_name, subs: c.data.subscribers };
             });
-    }).catch(function(err) { return { subs: [], reason: err.message }; });
+            return { subs: subs, reason: null };
+        }).catch(function(err) { return { subs: [], reason: err.message }; });
 }
 
 // ── NEW: Booru / Gallery Fetcher ─────────────────────────────────────────────
 function fetchFromBooru(site, tags, isNsfw) {
-    // Safebooru for SFW, Rule34 for NSFW
     var baseUrl = isNsfw ? "https://api.rule34.xxx/index.php" : "https://safebooru.org/index.php";
     var url = baseUrl + "?page=dapi&s=post&q=index&json=1&tags=" + encodeURIComponent(tags) + "&limit=20";
     
     return fetch(cacheBust(url), { headers: { "User-Agent": "RevengePlugin/1.0" } })
         .then(function(res) { return res.json(); })
-        .then(function(posts) {            if (!posts || !Array.isArray(posts) || !posts.length) return { url: null, reason: "No posts found for tags: " + tags };
+        .then(function(posts) {
+            if (!posts || !Array.isArray(posts) || !posts.length) return { url: null, reason: "No posts found for tags: " + tags };
             var valid = posts.filter(function(p) {
                 return p.file_url && (isImage(p.file_url) || isVideo(p.file_url));
             });
             if (!valid.length) return { url: null, reason: "No valid media files found for tags: " + tags };
             var pick = valid[Math.floor(Math.random() * valid.length)];
             return { url: pick.file_url, source: site + " (booru)", log: [] };
-        }).catch(function(err) { return { url: null, reason: err.message }; });
-}
+        }).catch(function(err) { return { url: null, reason: err.message }; });}
 
 // ── Sources ───────────────────────────────────────────────────────────────────
 var DEFAULT_SOURCES = {
@@ -168,16 +111,15 @@ var DEFAULT_SOURCES = {
 };
 
 var PRESET_PACKS = [
-    { id: "reddit-sfw",    label: "📋 Reddit SFW",        description: "Femboy & tomboy subreddits (needs Reddit Client ID)", sources:{ sfw:{ femboy:["femboymemes", "MildFemboys", "feminineboys"], tomboy:["tomboy", "tomboys", "AnimeTomboys"] } } },
-    { id: "reddit-nsfw",   label: "🔞 Reddit NSFW",       description: "NSFW subreddits (needs Reddit Client ID)",            sources:{ nsfw:{ femboy:["femboy", "traditionalfemboys"], tomboy:["tomboygf"] } } },
+    { id: "reddit-sfw",    label: "📋 Reddit SFW",        description: "Femboy & tomboy subreddits (NO API KEY NEEDED!)", sources:{ sfw:{ femboy:["femboymemes", "MildFemboys", "feminineboys"], tomboy:["tomboy", "tomboys", "AnimeTomboys"] } } },
+    { id: "reddit-nsfw",   label: "🔞 Reddit NSFW",       description: "NSFW subreddits (NO API KEY NEEDED!)",            sources:{ nsfw:{ femboy:["femboy", "traditionalfemboys"], tomboy:["tomboygf"] } } },
     { id: "waifupics-sfw", label: "🌸 Waifu.pics SFW",    description: "Extra anime SFW from api.waifu.pics",         sources:{ sfw:{ femboy:["https://api.waifu.pics/sfw/waifu", "https://api.waifu.pics/sfw/shinobu"], tomboy:["https://api.waifu.pics/sfw/neko"] } } },
-    { id: "waifupics-nsfw",label: "🔞🌸 Waifu.pics NSFW", description: "Anime NSFW from api.waifu.pics",              sources:{ nsfw:{ femboy:["https://api.waifu.pics/nsfw/waifu"], tomboy:["https://api.waifu.pics/nsfw/neko"] } } },
+    { id: "waifupics-nsfw",label: "🔞 Waifu.pics NSFW", description: "Anime NSFW from api.waifu.pics",              sources:{ nsfw:{ femboy:["https://api.waifu.pics/nsfw/waifu"], tomboy:["https://api.waifu.pics/nsfw/neko"] } } },
     { id: "nekoslife",     label: "🐱 Nekos.life SFW",    description: "Anime SFW from nekos.life",                   sources:{ sfw:{ femboy:["https://nekos.life/api/v2/img/neko"], tomboy:["https://nekos.life/api/v2/img/neko"] } } }
 ];
 
 if (!storage.customSources) storage.customSources = { sfw:{ femboy:[], tomboy:[] }, nsfw:{ femboy:[], tomboy:[] } };
 if (!storage.enabledPacks)  storage.enabledPacks   = [];
-if (storage.redditClientId === undefined) storage.redditClientId = "";
 
 var isImage = function(u) { return /\.(jpg|jpeg|png|webp)(\?.*)?$/i.test(u); };
 var isVideo = function(u) { return /\.(mp4|webm|gifv|gif)(\?.*)?$/i.test(u); };
@@ -194,7 +136,8 @@ function buildSources(type, cat) {
         }
     }
     var cu = storage.customSources && storage.customSources[cat] && storage.customSources[cat][type];
-    if (cu) for (var ci = 0; ci < cu.length; ci++) out.push(cu[ci]);    return out;
+    if (cu) for (var ci = 0; ci < cu.length; ci++) out.push(cu[ci]);
+    return out;
 }
 
 function fetchMedia(type, cat, wantVideo) {
@@ -202,7 +145,6 @@ function fetchMedia(type, cat, wantVideo) {
     var sources = shuffle(buildSources(type, cat));
     var log = [];
     if (!sources.length) return Promise.resolve({ url: null, source: null, log: ["no sources configured"] });
-
     function attempt(idx) {
         if (idx >= sources.length) return Promise.resolve({ url: null, source: null, log: log });
         var src = sources[idx];
@@ -243,7 +185,8 @@ function fetchMediaDedup(type, cat, wantVideo) {
     function tryFetch(retries) {
         return fetchMedia(type, cat, wantVideo).then(function(result) {
             if (!result.url) return result;
-            if (retries <= 0 || recentUrls[key].indexOf(result.url) === -1) {                recentUrls[key].push(result.url);
+            if (retries <= 0 || recentUrls[key].indexOf(result.url) === -1) {
+                recentUrls[key].push(result.url);
                 if (recentUrls[key].length > 15) recentUrls[key].shift();
                 return result;
             }
@@ -252,7 +195,6 @@ function fetchMediaDedup(type, cat, wantVideo) {
     }
     return tryFetch(2);
 }
-
 function fetchFromSubreddit(sub, kind) {
     var filter = kind === "video" ? isVideo : kind === "image" ? isImage : isAny;
     var log = [];
@@ -266,15 +208,12 @@ function fetchFromSubreddit(sub, kind) {
     }
     return attempt(0);
 }
-
-// ── Settings ─────────────────────────────────────────────────────────────────
+    // ── Settings ─────────────────────────────────────────────────────────────────
 exports.settings = function SettingsView() {
     var tabS = React.useState("packs"); var tab = tabS[0]; var setTab = tabS[1];
     var catS = React.useState("sfw");   var cat = catS[0]; var setCat = catS[1];
     var typS = React.useState("femboy");var typ = typS[0]; var setTyp = typS[1];
     var inpS = React.useState("");      var inp = inpS[0]; var setInp = inpS[1];
-    var ridS = React.useState(storage.redditClientId || ""); var ridInput = ridS[0]; var setRidInput = ridS[1];
-    var statusS = React.useState("");   var status = statusS[0]; var setStatus = statusS[1];
     var tikS = React.useState(0);       var setTik = tikS[1];
     var refresh = function() { setTik(function(t) { return t + 1; }); };
     var epacks = storage.enabledPacks || [];
@@ -288,12 +227,12 @@ exports.settings = function SettingsView() {
 
     return e(SV, { style:{flex:1}, contentContainerStyle:{padding:16} },
         e(V, { style:{flexDirection:"row",marginBottom:16} },
-            Pill("📦 Packs", tab==="packs", function(){setTab("packs");}, 6),
-            Pill("✏️ Custom", tab==="custom", function(){setTab("custom");}, 6),
-            Pill("🔑 Reddit", tab==="reddit", function(){setTab("reddit");})
+            Pill(" Packs", tab==="packs", function(){setTab("packs");}, 6),
+            Pill("✏️ Custom", tab==="custom", function(){setTab("custom");})
         ),
+
         tab==="packs" && e(V, null,
-            e(T, {style:{color:"#aaa",marginBottom:12,fontSize:13}}, "Nekos.best + Waifu.pics always on. Reddit packs need a Client ID (🔑 Reddit tab)."),
+            e(T, {style:{color:"#aaa",marginBottom:12,fontSize:13}}, "Reddit packs now use Public JSON. NO API KEY NEEDED!"),
             PRESET_PACKS.map(function(pack) {
                 var on = epacks.indexOf(pack.id) > -1;
                 return e(TO, { key:pack.id, onPress:function() { var i=storage.enabledPacks.indexOf(pack.id); if(i>-1) storage.enabledPacks.splice(i,1); else storage.enabledPacks.push(pack.id); refresh(); },
@@ -312,14 +251,13 @@ exports.settings = function SettingsView() {
             e(V, {style:{flexDirection:"row",marginBottom:12}},
                 Pill("Femboy", typ==="femboy", function(){setTyp("femboy");}, 8),
                 Pill("Tomboy", typ==="tomboy", function(){setTyp("tomboy");})),
-            e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Subreddit name (no r/) OR full URL — subreddits need a Reddit Client ID set"),
+            e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Subreddit name (no r/) OR full URL"),
             e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
                 placeholder:"subreddit or https://...", placeholderTextColor:"#555",
                 value:inp, onChangeText:setInp, autoCapitalize:"none", autoCorrect:false }),
             e(TO, { onPress:function() { var v=inp.trim(); if(!v||custom.indexOf(v)>-1) return; storage.customSources[cat][typ].push(v); setInp(""); refresh(); },
                 style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20} },
-                e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")),
-            e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your sources — "+cat.toUpperCase()+" / "+typ+":"),
+                e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")),            e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your sources — "+cat.toUpperCase()+" / "+typ+":"),
             custom.length===0
                 ? e(T, {style:{color:"#555",fontStyle:"italic"}}, "None yet.")
                 : custom.map(function(src, idx) {
@@ -328,32 +266,6 @@ exports.settings = function SettingsView() {
                         e(TO, {onPress:function(){storage.customSources[cat][typ].splice(idx,1);refresh();}},
                              e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "✕")));
                 })
-        ),
-
-        tab==="reddit" && e(V, null,
-            e(T, {style:{color:"#fff",fontWeight:"bold",fontSize:15,marginBottom:10}}, "Reddit OAuth Setup"),
-            e(T, {style:{color:"#aaa",fontSize:12,marginBottom:14,lineHeight:18}},
-                 "1. Open reddit.com/prefs/apps in your browser\n2. Tap 'create another app...'\n3. Type: select 'installed app'\n4. Redirect URI: anything, e.g. http://localhost\n5. Copy the string under the app name — that's your Client ID"
-            ),
-            e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:10},
-                placeholder:"Paste your Reddit Client ID here", placeholderTextColor:"#555",
-                value:ridInput, onChangeText:setRidInput, autoCapitalize:"none", autoCorrect:false }),
-            e(TO, { onPress:function() {
-                    storage.redditClientId = ridInput.trim();
-                    storage.redditToken = null; storage.redditTokenExpiry = null;
-                    setStatus("💾 Saved! Tap Test Connection below.");                },
-                style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:10} },
-                e(T, {style:{color:"#fff",fontWeight:"bold"}}, "Save Client ID")),
-            e(TO, { onPress:function() {
-                    setStatus("⏳ Testing...");
-                    storage.redditToken = null; storage.redditTokenExpiry = null;
-                    getRedditToken().then(function(token) {
-                        setStatus(token ? "✅ Connected! Reddit OAuth is working." : "❌ Failed. Double-check your Client ID.");
-                    });
-                },
-                style:{backgroundColor:"#2B2D31",padding:12,borderRadius:8,alignItems:"center",borderWidth:1,borderColor:"#444",marginBottom:14} },
-                e(T, {style:{color:"#fff",fontWeight:"bold"}}, "Test Connection")),
-            status ? e(T, {style:{color:"#ddd",fontSize:13}}, status) : null
         )
     );
 };
@@ -373,61 +285,40 @@ exports.onLoad = function() {
 
     unregFns.push(registerCommand({
         name: "nettest", untranslatedName: "nettest",
-        description: "Debug: checks which image-source domains your network can reach",
+        description: "Debug: checks which domains your network can reach",
         execute: function(args, ctx) {
             var cid = getChannelId(ctx);
-            sendPrivate(cid, "⏳ Testing domains, results coming one by one...");
+            sendPrivate(cid, "⏳ Testing domains...");
             var domains = [
                 ["api.waifu.pics", "https://api.waifu.pics/sfw/waifu"],
                 ["nekos.best", "https://nekos.best/api/v2/neko"],
-                ["nekos.life", "https://nekos.life/api/v2/img/neko"],
-                ["oauth.reddit.com (needs token)", "https://oauth.reddit.com/r/aww/hot?limit=1"]
+                ["reddit.com (public)", "https://www.reddit.com/r/aww/hot.json?limit=1"]
             ];
             domains.forEach(function(pair) {
                 var label = pair[0], url = pair[1];
                 var timedOut = false;
-                var timer = setTimeout(function() {
-                    timedOut = true;
-                    sendPrivate(cid, "⏱️ " + label + ": timed out (8s)");
-                }, 8000);
+                var timer = setTimeout(function() { timedOut = true; sendPrivate(cid, "⏱️ " + label + ": timed out"); }, 8000);
                 fetch(cacheBust(url), { headers: { "User-Agent": "RevengePlugin/1.0" } })
-                    .then(function(r) {
-                        if (timedOut) return;
-                        clearTimeout(timer);
-                        sendPrivate(cid, "✅ " + label + ": reachable (HTTP " + r.status + ")");
-                    })
-                    .catch(function(err) {
-                        if (timedOut) return;
-                        clearTimeout(timer);
-                        sendPrivate(cid, "❌ " + label + ": " + (err && err.message || "failed"));
-                    });
+                    .then(function(r) { if(!timedOut){clearTimeout(timer);sendPrivate(cid,"✅ "+label+": HTTP "+r.status);} })
+                    .catch(function(err) { if(!timedOut){clearTimeout(timer);sendPrivate(cid,"❌ "+label+": "+err.message);} });
             });
         }
     }));
 
     // ── NEW COMMAND: Find Subreddits ──────────────────────────────────────────
-    unregFns.push(registerCommand({
-        name: "findsubs", untranslatedName: "findsubs",
+    unregFns.push(registerCommand({        name: "findsubs", untranslatedName: "findsubs",
         description: "Search Reddit for subreddits matching a query",
-        options: [{
-            name: "query", displayName: "query", description: "Search term (e.g., femboy, tomboy)",
-            type: 3, required: true
-        }],
+        options: [{ name: "query", displayName: "query", description: "Search term", type: 3, required: true }],
         execute: function(args, ctx) {
             var cid = getChannelId(ctx);
             var query = (args && args[0] && args[0].value) || "";
             if (!query) { sendPrivate(cid, "❌ Please provide a search query."); return; }
-            
             sendPrivate(cid, "🔍 Searching Reddit for: `" + query + "`...");
             searchRedditSubreddits(query).then(function(res) {
                 if (res.reason) { sendPrivate(cid, "❌ Error: " + res.reason); return; }
-                if (!res.subs.length) { sendPrivate(cid, "❌ No subreddits found for `" + query + "`."); return; }
-                
+                if (!res.subs.length) { sendPrivate(cid, "❌ No subreddits found."); return; }
                 var msg = "✅ **Found Subreddits:**\n";
-                res.subs.forEach(function(s) {
-                    msg += "• **r/" + s.name + "** (" + s.subs.toLocaleString() + " members)\n";
-                });
-                msg += "\n*Tip: Use `/fromsub subreddit:" + res.subs[0].name + "` to fetch from them!*";
+                res.subs.forEach(function(s) { msg += "• **r/" + s.name + "** (" + s.subs.toLocaleString() + " members)\n"; });
                 sendPrivate(cid, msg);
             });
         }
@@ -436,32 +327,22 @@ exports.onLoad = function() {
     // ── NEW COMMAND: Fetch from Booru/Galleries ───────────────────────────────
     unregFns.push(registerCommand({
         name: "frombooru", untranslatedName: "frombooru",
-        description: "Fetch media from Booru-style image galleries (Safebooru/Rule34)",
+        description: "Fetch media from Booru-style image galleries",
         options: [
-            { name: "tags", displayName: "tags", description: "Tags to search (space separated, use _ for spaces)", type: 3, required: true },
-            { name: "site", displayName: "site", description: "Gallery site to use", type: 3, required: false,
-                choices: [
-                    { name: "safebooru (SFW)", displayName: "safebooru (SFW)", value: "safebooru" },
-                    { name: "rule34 (NSFW)", displayName: "rule34 (NSFW)", value: "rule34" }
-                ]
-            }
+            { name: "tags", displayName: "tags", description: "Tags to search", type: 3, required: true },
+            { name: "site", displayName: "site", description: "Gallery site", type: 3, required: false,
+                choices: [ { name: "safebooru (SFW)", displayName: "safebooru (SFW)", value: "safebooru" }, { name: "rule34 (NSFW)", displayName: "rule34 (NSFW)", value: "rule34" } ] }
         ],
         execute: function(args, ctx) {
             var cid = getChannelId(ctx);
             var tags = (args && args[0] && args[0].value) || "";
             var site = (args && args[1] && args[1].value) || "safebooru";
             var isNsfw = site === "rule34";
-            
-            if (!tags) { sendPrivate(cid, "❌ Please provide tags to search."); return; }
-            
+            if (!tags) { sendPrivate(cid, "❌ Please provide tags."); return; }
             sendPrivate(cid, "🖼️ Fetching from " + site + " with tags: `" + tags + "`...");
             fetchFromBooru(site, tags, isNsfw).then(function(result) {
-                if (result.url) { 
-                    send(cid, result.url); 
-                    sendPrivate(cid, "📍 Source: " + result.source); 
-                } else { 
-                    sendPrivate(cid, "❌ Nothing found.\n\nDebug: " + result.reason); 
-                }
+                if (result.url) { send(cid, result.url); sendPrivate(cid, "📍 Source: " + result.source); }
+                else { sendPrivate(cid, "❌ Nothing found.\n\nDebug: " + result.reason); }
             });
         }
     }));
@@ -469,45 +350,24 @@ exports.onLoad = function() {
     // ── NEW COMMAND: Check Sources Health ─────────────────────────────────────
     unregFns.push(registerCommand({
         name: "checksources", untranslatedName: "checksources",
-        description: "Test all configured API and Reddit sources to see if they are online",
+        description: "Test all configured API sources",
         execute: function(args, ctx) {
             var cid = getChannelId(ctx);
-            sendPrivate(cid, "🔧 Testing all configured sources... (This may take a few seconds)");
-            
+            sendPrivate(cid, "🔧 Testing sources...");
             var sources = [];
-            // Add default/pack/custom HTTP sources
-            ["sfw", "nsfw"].forEach(function(cat) {
-                ["femboy", "tomboy"].forEach(function(type) {
+            ["sfw", "nsfw"].forEach(function(cat) {                ["femboy", "tomboy"].forEach(function(type) {
                     var built = buildSources(type, cat);
-                    built.forEach(function(src) {
-                        if (src.indexOf("http") === 0 && sources.indexOf(src) === -1) sources.push(src);
-                    });
+                    built.forEach(function(src) { if (src.indexOf("http") === 0 && sources.indexOf(src) === -1) sources.push(src); });
                 });
             });
-
-            if (!sources.length) {
-                sendPrivate(cid, "❌ No HTTP/API sources configured to test.");
-                return;
-            }
-
-            var results = [];
-            var completed = 0;
-            
+            if (!sources.length) { sendPrivate(cid, "❌ No HTTP sources configured."); return; }
+            var results = [], completed = 0;
             sources.forEach(function(src) {
                 var label = labelFor(src);
                 fetch(cacheBust(src), { method: "GET", headers: { "User-Agent": "RevengePlugin/1.0" } })
-                    .then(function(res) {
-                        results.push("✅ **" + label + "** (HTTP " + res.status + ")");
-                    })
-                    .catch(function(err) {
-                        results.push("❌ **" + label + "** (" + (err.message || "Offline") + ")");
-                    })
-                    .finally(function() {
-                        completed++;
-                        if (completed === sources.length) {
-                            sendPrivate(cid, "📊 **Source Health Check Complete:**\n\n" + results.join("\n"));
-                        }
-                    });
+                    .then(function(res) { results.push("✅ **" + label + "** (HTTP " + res.status + ")"); })
+                    .catch(function(err) { results.push("❌ **" + label + "** (" + (err.message || "Offline") + ")"); })
+                    .finally(function() { completed++; if (completed === sources.length) sendPrivate(cid, "📊 **Check Complete:**\n\n" + results.join("\n")); });
             });
         }
     }));
@@ -515,10 +375,8 @@ exports.onLoad = function() {
     var combos = [["femboy", "sfw"],["femboy", "nsfw"],["tomboy", "sfw"],["tomboy", "nsfw"]];
     combos.forEach(function(pair) {
         var type = pair[0], cat = pair[1], name = cat==="nsfw" ? "nsfw_"+type : type;
-
         unregFns.push(registerCommand({
-            name: name, untranslatedName: name,
-            description: "Send a "+cat.toUpperCase()+" "+type+" image",
+            name: name, untranslatedName: name, description: "Send a "+cat.toUpperCase()+" "+type+" image",
             execute: function(args, ctx) {
                 var cid = getChannelId(ctx);
                 fetchMediaDedup(type, cat, false).then(function(result) {
@@ -527,10 +385,8 @@ exports.onLoad = function() {
                 });
             }
         }));
-
         unregFns.push(registerCommand({
-            name: name+"_video", untranslatedName: name+"_video",
-            description: "Send a "+cat.toUpperCase()+" "+type+" video/gif",
+            name: name+"_video", untranslatedName: name+"_video", description: "Send a "+cat.toUpperCase()+" "+type+" video/gif",
             execute: function(args, ctx) {
                 var cid = getChannelId(ctx);
                 fetchMediaDedup(type, cat, true).then(function(result) {
@@ -547,28 +403,21 @@ exports.onLoad = function() {
         options: [
             { name: "subreddit", displayName: "subreddit", description: "e.g. femboyfun (no r/)", type:3, required:true },
             { name: "kind", displayName: "kind", description: "Type of media", type:3, required:false,
-                choices:[
-                    { name: "image", displayName: "image", value: "image" },
-                    { name: "video/gif", displayName: "video/gif", value: "video" },
-                    { name: "any", displayName: "any", value: "any" }
-                ]
-            }
-        ],
-        execute: function(args, ctx) {
+                choices:[ { name: "image", displayName: "image", value: "image" }, { name: "video/gif", displayName: "video/gif", value: "video" }, { name: "any", displayName: "any", value: "any" } ] }
+        ],        execute: function(args, ctx) {
             var cid = getChannelId(ctx);
             var sub  = (args && args[0] && args[0].value || "").replace(/^r\//i, "").trim();
             var kind = (args && args[1] && args[1].value) || "any";
-            if (!sub) { sendPrivate(cid, "❌ You need to give a subreddit name."); return; }
+            if (!sub) { sendPrivate(cid, " You need to give a subreddit name."); return; }
             fetchFromSubreddit(sub, kind).then(function(result) {
-                if (result.url) { send(cid, result.url); sendPrivate(cid, "📍 Source: r/" + sub + " (reddit.com OAuth)"); }
-                else sendPrivate(cid, "❌ Nothing found on r/" + sub + " matching '" + kind + "'.\n\nDebug:\n" + result.log.slice(0, 5).join("\n"));
+                if (result.url) { send(cid, result.url); sendPrivate(cid, " Source: r/" + sub + " (Public JSON)"); }
+                else sendPrivate(cid, " Nothing found on r/" + sub + " matching '" + kind + "'.\n\nDebug:\n" + result.log.slice(0, 5).join("\n"));
             });
         }
     }));
 
     unregFns.push(registerCommand({
-        name: "guess", untranslatedName: "guess",
-        description: "Start a Femboy or Tomboy guessing game",
+        name: "guess", untranslatedName: "guess", description: "Start a Femboy or Tomboy guessing game",
         execute: function(args, ctx) {
             var cid = getChannelId(ctx);
             var type = Math.random() > 0.5 ? "femboy" : "tomboy";
@@ -581,16 +430,9 @@ exports.onLoad = function() {
     }));
 
     unregFns.push(registerCommand({
-        name: "answer", untranslatedName: "answer",
-        description: "Submit your guess for the current /guess game",
-        options: [{
-            name: "choice", displayName: "choice", description: "Your guess",
-            type:3, required:true,
-            choices:[
-                { name: "femboy", displayName: "femboy", value: "femboy" },
-                { name: "tomboy", displayName: "tomboy", value: "tomboy" }
-            ]
-        }],
+        name: "answer", untranslatedName: "answer", description: "Submit your guess for the current /guess game",
+        options: [{ name: "choice", displayName: "choice", description: "Your guess", type:3, required:true,
+            choices:[ { name: "femboy", displayName: "femboy", value: "femboy" }, { name: "tomboy", displayName: "tomboy", value: "tomboy" } ] }],
         execute: function(args, ctx) {
             var cid = getChannelId(ctx), correct = activeGuesses[cid];
             if (!correct) { sendPrivate(cid, "❌ No active game. Use /guess to start one."); return; }
