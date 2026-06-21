@@ -3,12 +3,12 @@
 var React = metro.findByProps("createElement", "useState");
 var RN = metro.findByProps("ScrollView", "TextInput", "TouchableOpacity");
 var MA = metro.findByProps("sendMessage", "sendBotMessage");
-var ChannelStore = metro.findByProps("getLastSelectedChannelId");
+var CS = metro.findByProps("getLastSelectedChannelId");
 
 function getChannelId(ctx) {
     try { if (ctx && ctx.channel && ctx.channel.id) return ctx.channel.id; } catch(e) {}
     try { if (ctx && ctx.channelId) return ctx.channelId; } catch(e) {}
-    try { return ChannelStore.getLastSelectedChannelId(); } catch(e) {}
+    try { return CS.getLastSelectedChannelId(); } catch(e) {}
     return null;
 }
 
@@ -43,7 +43,7 @@ function shuffle(arr) {
     return a;
 }
 
-var REDDIT_UA = "android:com.femboytomboyguess.plugin:v1.0 (by /u/anonymous)";
+var REDDIT_UA = "android:com.femboytomboyguess.plugin:v1.0";
 
 function fetchRedditPost(sub, filterFn, requireSfw) {
     var url = "https://www.reddit.com/r/" + sub + "/hot.json?limit=50";
@@ -202,7 +202,7 @@ exports.settings = function SettingsView() {
     var epacks = storage.enabledPacks || [];
     var custom = (storage.customSources && storage.customSources[cat] && storage.customSources[cat][typ]) || [];
     var e = React.createElement, SV = RN.ScrollView, V = RN.View, T = RN.Text, TI = RN.TextInput, TO = RN.TouchableOpacity;
-    
+
     function Pill(label, active, fn, mr) {
         return e(TO, { onPress: fn, style: { flex:1, padding:9, backgroundColor:active? "#5865F2" : "#2B2D31", borderRadius:8, alignItems:"center", marginRight:mr||0 } },
             e(T, { style: { color: "#fff", fontWeight: "bold", fontSize:13 } }, label));
@@ -211,7 +211,7 @@ exports.settings = function SettingsView() {
     return e(SV, { style:{flex:1}, contentContainerStyle:{padding:16} },
         e(V, { style:{flexDirection:"row",marginBottom:16} },
             Pill("Packs", tab==="packs", function(){setTab("packs");}, 6),
-            Pill("✏️ Custom", tab==="custom", function(){setTab("custom");})
+            Pill("Custom", tab==="custom", function(){setTab("custom");})
         ),
         tab==="packs" && e(V, null,
             e(T, {style:{color:"#aaa",marginBottom:12,fontSize:13}}, "Reddit packs use Public JSON - NO API KEY NEEDED!"),
@@ -221,7 +221,7 @@ exports.settings = function SettingsView() {
                     style:{backgroundColor:on? "#1a3a6e" : "#2B2D31",borderRadius:10,padding:14,marginBottom:10,borderWidth:1,borderColor:on? "#5865F2" : "#444"} },
                     e(V, {style:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"}},
                         e(T, {style:{color:"#fff",fontWeight:"bold",fontSize:15,flex:1}}, pack.label),
-                        e(T, {style:{fontSize:18}}, on? "✅" : "⬜")),
+                        e(T, {style:{fontSize:18}}, on? "✅" : "")),
                     e(T, {style:{color:"#aaa",fontSize:12,marginTop:4}}, pack.description));
             })
         ),
@@ -239,11 +239,11 @@ exports.settings = function SettingsView() {
             e(TO, { onPress:function() { var v=inp.trim(); if(!v||custom.indexOf(v)>-1) return; storage.customSources[cat][typ].push(v); setInp(""); refresh(); },
                 style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20} },
                 e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")),
-            e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your sources — "+cat.toUpperCase()+" / "+typ+":"),
+            e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your sources - "+cat.toUpperCase()+" / "+typ+":"),
             custom.length===0 ? e(T, {style:{color:"#555",fontStyle:"italic"}}, "None yet.") :
                 custom.map(function(src, idx) {
                     return e(V, {key:idx, style:{flexDirection:"row",alignItems:"center",backgroundColor:"#2B2D31",padding:10,borderRadius:8,marginBottom:8}},
-                        e(T, {style:{color:"#ddd",flex:1,marginRight:8}, numberOfLines:1}, src),                        e(TO, {onPress:function(){storage.customSources[cat][typ].splice(idx,1);refresh();}}, e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "✕")));
+                        e(T, {style:{color:"#ddd",flex:1,marginRight:8}, numberOfLines:1}, src),                        e(TO, {onPress:function(){storage.customSources[cat][typ].splice(idx,1);refresh();}}, e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "X")));
                 })
         )
     );
@@ -268,7 +268,7 @@ exports.onLoad = function() {
                 if (res.reason) { sendPrivate(cid, "Error: " + res.reason); return; }
                 if (!res.subs.length) { sendPrivate(cid, "No subreddits found"); return; }
                 var msg = "Found Subreddits:\n";
-                res.subs.forEach(function(s) { msg += "• r/" + s.name + " (" + s.subs.toLocaleString() + " members)\n"; });
+                res.subs.forEach(function(s) { msg += "r/" + s.name + " (" + s.subs.toLocaleString() + " members)\n"; });
                 sendPrivate(cid, msg);
             });
         }
@@ -313,8 +313,8 @@ exports.onLoad = function() {
             sources.forEach(function(src) {
                 var label = labelFor(src);
                 fetch(cacheBust(src), { method: "GET" })
-                    .then(function(res) { results.push("✅ " + label + " (HTTP " + res.status + ")"); })
-                    .catch(function(err) { results.push("❌ " + label + " (" + err.message + ")"); })
+                    .then(function(res) { results.push(label + " (HTTP " + res.status + ")"); })
+                    .catch(function(err) { results.push(label + " (" + err.message + ")"); })
                     .finally(function() { completed++; if (completed === sources.length) sendPrivate(cid, "Check Complete:\n\n" + results.join("\n")); });
             });
         }
@@ -371,7 +371,7 @@ exports.onLoad = function() {
             var type = Math.random() > 0.5 ? "femboy" : "tomboy";
             fetchMediaDedup(type, "sfw", false).then(function(result) {
                 if (!result.url) { sendPrivate(cid, "Fetch failed"); return; }
-                activeGuesses[cid] = type;
+        activeGuesses[cid] = type;
                 send(cid, "Femboy or Tomboy?\nUse /answer\n\n" + result.url);
             });
         }
