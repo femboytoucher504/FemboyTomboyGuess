@@ -31,7 +31,7 @@ function labelFor(src) {
         var m = src.match(/^https?:\/\/([^\/]+)/);
         return m ? m[1] : src;
     }
-    return "r/" + src + " (reddit.com)";
+    return "r/" + src;
 }
 
 function shuffle(arr) {
@@ -44,10 +44,17 @@ function shuffle(arr) {
 }
 
 var REDDIT_UA = "Mozilla/5.0 (Linux; Android 10; Mobile)";
+var isImage = function(u) { return /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(u); };
+var isVideo = function(u) { return /\.(mp4|webm|gifv|mov)(\?.*)?$/i.test(u); };
+var isAny = function() { return true; };
 
-// Public Reddit API - NO OAuth needed!
-function fetchRedditPublic(sub, filterFn, requireSfw) {
-    var url = "https://www.reddit.com/r/" + sub + "/hot.json?limit=100";    return fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
+// Public Reddit JSON endpoint - no OAuth, but Reddit increasingly blocks
+// requests coming from VPN / datacenter IP ranges with a plain 403.
+// There's no reliable code-side fix for that; we just log it and move on
+// to the next source instead of failing the whole command.
+function fetchRedditPublic(sub, filterFn) {
+    var url = "https://www.reddit.com/r/" + sub + "/hot.json?limit=100";
+    return fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
         .then(function(res) {
             if (!res.ok) return { url: null, reason: "HTTP " + res.status };
             return res.json().then(function(json) {
@@ -55,9 +62,7 @@ function fetchRedditPublic(sub, filterFn, requireSfw) {
                 var candidates = [];
                 for (var i = 0; i < posts.length; i++) {
                     var d = posts[i] && posts[i].data;
-                    if (!d || !d.url) continue;
-                    if (d.is_video) continue;
-                    if (requireSfw && d.over_18) continue;
+                    if (!d || !d.url || d.is_video || d.over_18) continue;
                     if (filterFn(d.url)) candidates.push(d.url);
                 }
                 if (!candidates.length) return { url: null, reason: "no posts" };
@@ -66,104 +71,57 @@ function fetchRedditPublic(sub, filterFn, requireSfw) {
         }).catch(function(err) { return { url: null, reason: err.message || "error" }; });
 }
 
-function fetchFromBooru(site, tags, isNsfw) {
-    var baseUrl = isNsfw ? "https://api.rule34.xxx/index.php" : "https://safebooru.org/index.php";
-    var url = baseUrl + "?page=dapi&s=post&q=index&json=1&tags=" + encodeURIComponent(tags) + "&limit=50";
-    return fetch(cacheBust(url), { headers: { "User-Agent": "RevengePlugin/1.0" } })
-        .then(function(res) { return res.json(); })
-        .then(function(posts) {
-            if (!posts || !Array.isArray(posts) || !posts.length) return { url: null, reason: "No posts" };
-            var valid = posts.filter(function(p) {
-                return p.file_url && (isImage(p.file_url) || isVideo(p.file_url));
+// Generic fetcher for any custom HTTP image-API source the user adds in
+// Settings. Handles plain {url}/{file}/{message}/{src}/{image} shapes AND
+// {results:[{url}]} shapes (e.g. nekos.best) - this was the actual bug
+// that made nekos.best return HTTP 200 but "no url".
+function fetchGenericSource(src, filterFn) {
+    return fetch(cacheBust(src), { headers: { "User-Agent": "RevengeImageBot/1.0" } })
+        .then(function(res) {
+            if (!res.ok) return { url: null, reason: "HTTP " + res.status };
+            var ct = res.headers.get("content-type") || "";
+            if (ct.indexOf("image/") > -1 || ct.indexOf("video/") > -1) {
+                return filterFn(src) ? { url: src, reason: null } : { url: null, reason: "wrong type" };
+            }
+            return res.json().then(function(d) {
+                var u = d.url || d.file || d.message || d.src || d.image || "";
+                if (!u && d.results && d.results.length && d.results[0] && d.results[0].url) u = d.results[0].url;
+                if (u && filterFn(u)) return { url: u, reason: null };
+                return { url: null, reason: "no usable url" };
             });
-            if (!valid.length) return { url: null, reason: "No media" };
-            var pick = valid[Math.floor(Math.random() * valid.length)];
-            return { url: pick.file_url, source: site, log: [] };
-        }).catch(function(err) { return { url: null, reason: err.message }; });
+        }).catch(function(err) { return { url: null, reason: err.message || "error" }; });
 }
 
-// WORKING HUMAN PHOTO SOURCES - No OAuth needed!
+if (!storage.customSources) storage.customSources = { femboy: [], tomboy: [] };
+if (!storage.customSources.femboy) storage.customSources.femboy = [];
+if (!storage.customSources.tomboy) storage.customSources.tomboy = [];
+
 var DEFAULT_SOURCES = {
-    sfw: {
-        femboy: [
-            "https://www.reddit.com/r/femboymemes/hot.json?limit=50",
-            "https://www.reddit.com/r/MildFemboys/hot.json?limit=50",
-            "https://www.reddit.com/r/feminineboys/hot.json?limit=50"
-        ],
-        tomboy: [
-            "https://www.reddit.com/r/tomboy/hot.json?limit=50",
-            "https://www.reddit.com/r/tomboys/hot.json?limit=50"
-        ]
-    },
-    nsfw: {
-        femboy: [            "https://www.reddit.com/r/femboy/hot.json?limit=50",
-            "https://www.reddit.com/r/traditionalfemboys/hot.json?limit=50",
-            "https://www.reddit.com/r/femboyhentai/hot.json?limit=50"
-        ],
-        tomboy: ["https://www.reddit.com/r/tomboygf/hot.json?limit=50"]
-    }
+    femboy: ["femboymemes", "MildFemboys", "feminineboys"],
+    tomboy: ["tomboy", "tomboys"]
 };
 
-var PRESET_PACKS = [
-    { id: "reddit-sfw", label: "Reddit SFW", description: "Human SFW (Public API - Works through VPN!)", sources:{ sfw:{ femboy:["femboymemes", "MildFemboys", "feminineboys"], tomboy:["tomboy", "tomboys"] } } },
-    { id: "reddit-nsfw", label: "Reddit NSFW", description: "Human NSFW (Public API - Works through VPN!)", sources:{ nsfw:{ femboy:["femboy", "traditionalfemboys", "femboyhentai"], tomboy:["tomboygf"] } } },
-    { id: "nekos-sfw", label: "Nekos.best SFW", description: "Anime SFW", sources:{ sfw:{ femboy:["https://nekos.best/api/v2/waifu"], tomboy:["https://nekos.best/api/v2/neko"] } } }
-];
-
-if (!storage.customSources) storage.customSources = { sfw:{ femboy:[], tomboy:[] }, nsfw:{ femboy:[], tomboy:[] } };
-if (!storage.enabledPacks) storage.enabledPacks = [];
-
-var isImage = function(u) { return /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(u); };
-var isVideo = function(u) { return /\.(mp4|webm|gifv|mov)(\?.*)?$/i.test(u); };
-var isAny = function() { return true; };
-
-function buildSources(type, cat) {
-    var out = [], def = DEFAULT_SOURCES[cat] && DEFAULT_SOURCES[cat][type];
-    if (def) for (var d = 0; d < def.length; d++) out.push(def[d]);
-    var pks = storage.enabledPacks || [];
-    for (var pi = 0; pi < pks.length; pi++) for (var pp = 0; pp < PRESET_PACKS.length; pp++) {
-        if (PRESET_PACKS[pp].id === pks[pi]) {
-            var s = PRESET_PACKS[pp].sources && PRESET_PACKS[pp].sources[cat] && PRESET_PACKS[pp].sources[cat][type];
-            if (s) for (var si = 0; si < s.length; si++) out.push(s[si]);
-        }
-    }
-    var cu = storage.customSources && storage.customSources[cat] && storage.customSources[cat][type];
-    if (cu) for (var ci = 0; ci < cu.length; ci++) out.push(cu[ci]);
+function buildSources(type) {
+    var out = DEFAULT_SOURCES[type] ? DEFAULT_SOURCES[type].slice() : [];
+    var custom = storage.customSources[type] || [];
+    for (var i = 0; i < custom.length; i++) out.push(custom[i]);
     return out;
 }
 
-function fetchMedia(type, cat, wantVideo) {
+function fetchMedia(type, wantVideo) {
     var filter = wantVideo ? isVideo : isImage;
-    var sources = shuffle(buildSources(type, cat));
+    var sources = shuffle(buildSources(type));
     var log = [];
-    if (!sources.length) return Promise.resolve({ url: null, source: null, log: ["no sources"] });
+    if (!sources.length) return Promise.resolve({ url: null, source: null, log: ["No sources configured for " + type] });
 
     function attempt(idx) {
         if (idx >= sources.length) return Promise.resolve({ url: null, source: null, log: log });
         var src = sources[idx];
         var label = labelFor(src);
-
-        if (src.indexOf("http") === 0) {
-            return fetch(cacheBust(src), { headers: { "User-Agent": "RevengePlugin/1.0" } })
-                .then(function(res) {                    if (!res.ok) { log.push(label + ": HTTP " + res.status); return attempt(idx + 1); }
-                    var ct = res.headers.get("content-type") || "";
-                    if (ct.indexOf("image/") > -1 || ct.indexOf("video/") > -1) {
-                        if (filter(src)) return { url: src, source: label, log: log };
-                        log.push(label + ": wrong type"); return attempt(idx + 1);
-                    }
-                    return res.json().then(function(d) {
-                        var u = d.url || d.file || d.message || d.src || d.image || "";
-                        if (u && filter(u)) return { url: u, source: label, log: log };
-                        log.push(label + ": no url");
-                        return attempt(idx + 1);
-                    });
-                }).catch(function(err) { log.push(label + ": " + err.message); return attempt(idx + 1); });
-        }
-        
-        // Reddit public API source
-        return fetchRedditPublic(src, filter, cat === "sfw").then(function(result) {
+        var p = src.indexOf("http") === 0 ? fetchGenericSource(src, filter) : fetchRedditPublic(src, filter);
+        return p.then(function(result) {
             if (result.url) return { url: result.url, source: label, log: log };
-            log.push(label + ": " + result.reason);
+            log.push(label + ": " + (result.reason || "failed"));
             return attempt(idx + 1);
         });
     }
@@ -171,11 +129,11 @@ function fetchMedia(type, cat, wantVideo) {
 }
 
 var recentUrls = {};
-function fetchMediaDedup(type, cat, wantVideo) {
-    var key = type + ":" + cat + ":" + (wantVideo ? "v" : "i");
+function fetchMediaDedup(type, wantVideo) {
+    var key = type + ":" + (wantVideo ? "v" : "i");
     if (!recentUrls[key]) recentUrls[key] = [];
     function tryFetch(retries) {
-        return fetchMedia(type, cat, wantVideo).then(function(result) {
+        return fetchMedia(type, wantVideo).then(function(result) {
             if (!result.url) return result;
             if (retries <= 0 || recentUrls[key].indexOf(result.url) === -1) {
                 recentUrls[key].push(result.url);
@@ -193,25 +151,24 @@ function fetchFromSubreddit(sub, kind) {
     var log = [];
     function attempt(i) {
         if (i >= 3) return Promise.resolve({ url: null, log: log });
-        return fetchRedditPublic(sub, filter, false).then(function(result) {
-            if (result.url) return { url: result.url, log: log };            log.push(result.reason);
+        return fetchRedditPublic(sub, filter).then(function(result) {
+            if (result.url) return { url: result.url, log: log };
+            log.push(result.reason);
             return attempt(i + 1);
         });
     }
     return attempt(0);
-                                      }
-    // ── Settings ─────────────────────────────────────────────────────────────────
+}
+
+// ── Settings ─────────────────────────────────────────────────────────────────
 exports.settings = function SettingsView() {
-    var tabS = React.useState("packs"); var tab = tabS[0]; var setTab = tabS[1];
-    var catS = React.useState("sfw"); var cat = catS[0]; var setCat = catS[1];
     var typS = React.useState("femboy"); var typ = typS[0]; var setTyp = typS[1];
     var inpS = React.useState(""); var inp = inpS[0]; var setInp = inpS[1];
     var tikS = React.useState(0); var setTik = tikS[1];
     var refresh = function() { setTik(function(t) { return t + 1; }); };
-    var epacks = storage.enabledPacks || [];
-    var custom = (storage.customSources && storage.customSources[cat] && storage.customSources[cat][typ]) || [];
+    var custom = storage.customSources[typ] || [];
     var e = React.createElement, SV = RN.ScrollView, V = RN.View, T = RN.Text, TI = RN.TextInput, TO = RN.TouchableOpacity;
-    
+
     function Pill(label, active, fn, mr) {
         return e(TO, { onPress: fn, style: { flex:1, padding:9, backgroundColor:active? "#5865F2" : "#2B2D31", borderRadius:8, alignItems:"center", marginRight:mr||0 } },
             e(T, { style: { color: "#fff", fontWeight: "bold", fontSize:13 } }, label));
@@ -219,42 +176,24 @@ exports.settings = function SettingsView() {
 
     return e(SV, { style:{flex:1}, contentContainerStyle:{padding:16} },
         e(V, { style:{flexDirection:"row",marginBottom:16} },
-            Pill("Packs", tab==="packs", function(){setTab("packs");}, 6),
-            Pill("Custom", tab==="custom", function(){setTab("custom");})
+            Pill("Femboy", typ==="femboy", function(){setTyp("femboy");}, 8),
+            Pill("Tomboy", typ==="tomboy", function(){setTyp("tomboy");})
         ),
-        tab==="packs" && e(V, null,
-            e(T, {style:{color:"#aaa",marginBottom:12,fontSize:13}}, "Reddit packs use Public JSON - NO API KEY NEEDED! Works through VPN!"),
-            PRESET_PACKS.map(function(pack) {
-                var on = epacks.indexOf(pack.id) > -1;
-                return e(TO, { key:pack.id, onPress:function() { var i=storage.enabledPacks.indexOf(pack.id); if(i>-1) storage.enabledPacks.splice(i,1); else storage.enabledPacks.push(pack.id); refresh(); },
-                    style:{backgroundColor:on? "#1a3a6e" : "#2B2D31",borderRadius:10,padding:14,marginBottom:10,borderWidth:1,borderColor:on? "#5865F2" : "#444"} },
-                    e(V, {style:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"}},
-                        e(T, {style:{color:"#fff",fontWeight:"bold",fontSize:15,flex:1}}, pack.label),
-                        e(T, {style:{fontSize:18}}, on? "✅" : "")),
-                    e(T, {style:{color:"#aaa",fontSize:12,marginTop:4}}, pack.description));
+        e(T, {style:{color:"#aaa",fontSize:12,marginBottom:10}}, "Default subreddits: " + DEFAULT_SOURCES[typ].join(", ")),
+        e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Add a subreddit name OR a full image-API URL"),
+        e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
+            placeholder:"subreddit or https://...", placeholderTextColor:"#555",
+            value:inp, onChangeText:setInp, autoCapitalize:"none", autoCorrect:false }),
+        e(TO, { onPress:function() { var v=inp.trim(); if(!v||custom.indexOf(v)>-1) return; storage.customSources[typ].push(v); setInp(""); refresh(); },
+            style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20} },
+            e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")),
+        e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your custom " + typ + " sources:"),
+        custom.length===0 ? e(T, {style:{color:"#555",fontStyle:"italic"}}, "None yet.") :
+            custom.map(function(src, idx) {
+                return e(V, {key:idx, style:{flexDirection:"row",alignItems:"center",backgroundColor:"#2B2D31",padding:10,borderRadius:8,marginBottom:8}},
+                    e(T, {style:{color:"#ddd",flex:1,marginRight:8}, numberOfLines:1}, src),
+                    e(TO, {onPress:function(){storage.customSources[typ].splice(idx,1);refresh();}}, e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "X")));
             })
-        ),
-        tab==="custom" && e(V, null,
-            e(V, {style:{flexDirection:"row",marginBottom:8}},
-                Pill("SFW", cat==="sfw", function(){setCat("sfw");}, 8),
-                Pill("NSFW", cat==="nsfw", function(){setCat("nsfw");})),
-            e(V, {style:{flexDirection:"row",marginBottom:12}},
-                Pill("Femboy", typ==="femboy", function(){setTyp("femboy");}, 8),
-                Pill("Tomboy", typ==="tomboy", function(){setTyp("tomboy");})),
-            e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Subreddit name OR full URL"),
-            e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
-                placeholder:"subreddit or https://...", placeholderTextColor:"#555",
-                value:inp, onChangeText:setInp, autoCapitalize:"none", autoCorrect:false }),
-            e(TO, { onPress:function() { var v=inp.trim(); if(!v||custom.indexOf(v)>-1) return; storage.customSources[cat][typ].push(v); setInp(""); refresh(); },
-                style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20} },
-                e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")),
-            e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your sources - "+cat.toUpperCase()+" / "+typ+":"),
-            custom.length===0 ? e(T, {style:{color:"#555",fontStyle:"italic"}}, "None yet.") :                custom.map(function(src, idx) {
-                    return e(V, {key:idx, style:{flexDirection:"row",alignItems:"center",backgroundColor:"#2B2D31",padding:10,borderRadius:8,marginBottom:8}},
-                        e(T, {style:{color:"#ddd",flex:1,marginRight:8}, numberOfLines:1}, src),
-                        e(TO, {onPress:function(){storage.customSources[cat][typ].splice(idx,1);refresh();}}, e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "X")));
-                })
-        )
     );
 };
 
@@ -275,7 +214,7 @@ exports.onLoad = function() {
             if (!query) { sendPrivate(cid, "Provide a query"); return; }
             sendPrivate(cid, "Searching Reddit for: " + query);
             var url = "https://www.reddit.com/subreddits/search.json?q=" + encodeURIComponent(query) + "&limit=10";
-            fetch(cacheBust(url), { headers: { "User-Agent": "Mozilla/5.0" } })
+            fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
                 .then(function(res) { return res.json(); })
                 .then(function(json) {
                     var children = (json && json.data && json.data.children) || [];
@@ -288,44 +227,21 @@ exports.onLoad = function() {
     }));
 
     unregFns.push(registerCommand({
-        name: "frombooru", untranslatedName: "frombooru",
-        description: "Fetch from booru galleries",
-        options: [
-            { name: "tags", displayName: "tags", description: "Tags", type: 3, required: true },
-            { name: "site", displayName: "site", description: "Site", type: 3, required: false,
-                choices: [ { name: "safebooru (SFW)", value: "safebooru" }, { name: "rule34 (NSFW)", value: "rule34" } ] }
-        ],
-        execute: function(args, ctx) {
-            var cid = getChannelId(ctx);
-            var tags = (args && args[0] && args[0].value) || "";
-            var site = (args && args[1] && args[1].value) || "safebooru";            var isNsfw = site === "rule34";
-            if (!tags) { sendPrivate(cid, "Provide tags"); return; }
-            sendPrivate(cid, "Fetching from " + site);
-            fetchFromBooru(site, tags, isNsfw).then(function(result) {
-                if (result.url) { send(cid, result.url); sendPrivate(cid, "Source: " + result.source); }
-                else { sendPrivate(cid, "Nothing found: " + result.reason); }
-            });
-        }
-    }));
-
-    unregFns.push(registerCommand({
         name: "checksources", untranslatedName: "checksources",
-        description: "Test all sources",
+        description: "Test all configured sources",
         execute: function(args, ctx) {
             var cid = getChannelId(ctx);
             sendPrivate(cid, "Testing sources...");
             var sources = [];
-            ["sfw", "nsfw"].forEach(function(cat) {
-                ["femboy", "tomboy"].forEach(function(type) {
-                    var built = buildSources(type, cat);
-                    built.forEach(function(src) { if (src.indexOf("http") === 0 && sources.indexOf(src) === -1) sources.push(src); });
-                });
+            ["femboy", "tomboy"].forEach(function(type) {
+                buildSources(type).forEach(function(src) { if (sources.indexOf(src) === -1) sources.push(src); });
             });
-            if (!sources.length) { sendPrivate(cid, "No HTTP sources"); return; }
+            if (!sources.length) { sendPrivate(cid, "No sources configured."); return; }
             var results = [], completed = 0;
             sources.forEach(function(src) {
                 var label = labelFor(src);
-                fetch(cacheBust(src), { method: "GET" })
+                var url = src.indexOf("http") === 0 ? src : "https://www.reddit.com/r/" + src + "/hot.json?limit=1";
+                fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
                     .then(function(res) { results.push(label + " (HTTP " + res.status + ")"); })
                     .catch(function(err) { results.push(label + " (" + err.message + ")"); })
                     .finally(function() { completed++; if (completed === sources.length) sendPrivate(cid, "Check Complete:\n\n" + results.join("\n")); });
@@ -333,23 +249,22 @@ exports.onLoad = function() {
         }
     }));
 
-    var combos = [["femboy", "sfw"],["femboy", "nsfw"],["tomboy", "sfw"],["tomboy", "nsfw"]];
-    combos.forEach(function(pair) {
-        var type = pair[0], cat = pair[1], name = cat==="nsfw" ? "nsfw_"+type : type;
+    ["femboy", "tomboy"].forEach(function(type) {
         unregFns.push(registerCommand({
-            name: name, untranslatedName: name, description: "Send "+cat.toUpperCase()+" "+type+" image",
+            name: type, untranslatedName: type, description: "Send a random " + type + " picture",
             execute: function(args, ctx) {
                 var cid = getChannelId(ctx);
-                fetchMediaDedup(type, cat, false).then(function(result) {
+                fetchMediaDedup(type, false).then(function(result) {
                     if (result.url) { send(cid, result.url); sendPrivate(cid, "Source: " + result.source); }
                     else sendPrivate(cid, "All sources failed.\nDebug:\n" + result.log.slice(0, 8).join("\n"));
                 });
             }
         }));
         unregFns.push(registerCommand({
-            name: name+"_video", untranslatedName: name+"_video", description: "Send "+cat.toUpperCase()+" "+type+" video",            execute: function(args, ctx) {
+            name: type + "_video", untranslatedName: type + "_video", description: "Send a random " + type + " video/gif",
+            execute: function(args, ctx) {
                 var cid = getChannelId(ctx);
-                fetchMediaDedup(type, cat, true).then(function(result) {
+                fetchMediaDedup(type, true).then(function(result) {
                     if (result.url) { send(cid, result.url); sendPrivate(cid, "Source: " + result.source); }
                     else sendPrivate(cid, "No video found.\nDebug:\n" + result.log.slice(0, 8).join("\n"));
                 });
@@ -359,9 +274,9 @@ exports.onLoad = function() {
 
     unregFns.push(registerCommand({
         name: "fromsub", untranslatedName: "fromsub",
-        description: "Pull from specific subreddit",
+        description: "Pull an image from any specific subreddit",
         options: [
-            { name: "subreddit", displayName: "subreddit", description: "e.g. femboy", type:3, required:true },
+            { name: "subreddit", displayName: "subreddit", description: "e.g. cats", type:3, required:true },
             { name: "kind", displayName: "kind", description: "Type", type:3, required:false,
                 choices:[ { name: "image", value: "image" }, { name: "video", value: "video" }, { name: "any", value: "any" } ] }
         ],
@@ -372,32 +287,33 @@ exports.onLoad = function() {
             if (!sub) { sendPrivate(cid, "Give a subreddit"); return; }
             fetchFromSubreddit(sub, kind).then(function(result) {
                 if (result.url) { send(cid, result.url); sendPrivate(cid, "Source: r/" + sub); }
-                else sendPrivate(cid, "Nothing found on r/" + sub);
+                else sendPrivate(cid, "Nothing found on r/" + sub + "\n" + result.log.slice(0,5).join("\n"));
             });
         }
     }));
 
     unregFns.push(registerCommand({
-        name: "guess", untranslatedName: "guess", description: "Start guessing game",
+        name: "guess", untranslatedName: "guess", description: "Start a femboy-or-tomboy guessing game",
         execute: function(args, ctx) {
             var cid = getChannelId(ctx);
             var type = Math.random() > 0.5 ? "femboy" : "tomboy";
-            fetchMediaDedup(type, "sfw", false).then(function(result) {
-                if (!result.url) { sendPrivate(cid, "Fetch failed"); return; }
+            fetchMediaDedup(type, false).then(function(result) {
+                if (!result.url) { sendPrivate(cid, "Fetch failed, try again."); return; }
                 activeGuesses[cid] = type;
-                send(cid, "Femboy or Tomboy?\nUse /answer\n\n" + result.url);
+                send(cid, "Femboy or Tomboy?\nUse /answer to guess\n\n" + result.url);
             });
         }
     }));
 
     unregFns.push(registerCommand({
-        name: "answer", untranslatedName: "answer", description: "Submit guess",
+        name: "answer", untranslatedName: "answer", description: "Submit your guess",
         options: [{ name: "choice", displayName: "choice", description: "Guess", type:3, required:true,
             choices:[ { name: "femboy", value: "femboy" }, { name: "tomboy", value: "tomboy" } ] }],
         execute: function(args, ctx) {
             var cid = getChannelId(ctx), correct = activeGuesses[cid];
-            if (!correct) { sendPrivate(cid, "No active game"); return; }            var guess = args && args[0] && args[0].value, won = guess === correct;
-            send(cid, won ? "Correct! It was "+correct+"!" : "Wrong! It was "+correct+"!");
+            if (!correct) { sendPrivate(cid, "No active game. Use /guess to start one."); return; }
+            var guess = args && args[0] && args[0].value, won = guess === correct;
+            send(cid, won ? "Correct! It was " + correct + "!" : "Wrong! It was " + correct + "!");
             delete activeGuesses[cid];
         }
     }));
@@ -412,3 +328,4 @@ exports.onUnload = function() {
 
 return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
+                
