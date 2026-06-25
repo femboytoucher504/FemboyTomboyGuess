@@ -1,15 +1,11 @@
 {
-  "id": "guess-game",
-  "name": "TomboyOrFemboy",
+  "id": "femboy-tomboy-bot",
+  "name": "Femboy/Tomboy Image Bot",
   "version": "1.0.0",
-  "description": "Random tomboy/femboy pictures and a guessing game.",
+  "description": "Random SFW femboy/tomboy images via slash commands, a guessing game, and configurable custom sources.",
   "main": "index.js",
-  "hash": "d649b605676ce26a24a7024f2dd2caa09df9a7d0b0fc58934078e6a6eb7d7e90",
+  "hash": "a5faff5e2d5ddb8f1a67bfdbf0a5d26842702ca7d964f61d3114b3bd4087a1de",
   "authors": [
-    {
-      "name": "femboytoucher504",
-      "id": "0"
-    }
+    { "name": "FemboyToucher", "id": "0" }
   ]
 }
-
