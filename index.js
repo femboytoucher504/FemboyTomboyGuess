@@ -13,7 +13,7 @@ var ChannelStore = metro.findByProps("getLastSelectedChannelId");
 // touch this path at all - direct requests are always tried first.
 // Leave it as "" if you don't want a shared default; people can still set
 // their own in Settings -> Proxy.
-var BAKED_IN_PROXY_URL = "";
+var BAKED_IN_PROXY_URL = "https://femboytoucher.ahmemuhsins3169.workers.dev/";
 
 function getChannelId(ctx) {
     try { if (ctx && ctx.channel && ctx.channel.id) return ctx.channel.id; } catch(e) {}
