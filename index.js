@@ -5,6 +5,16 @@ var RN = metro.findByProps("ScrollView", "TextInput", "TouchableOpacity");
 var MA = metro.findByProps("sendMessage", "sendBotMessage");
 var ChannelStore = metro.findByProps("getLastSelectedChannelId");
 
+// ── Optional: bake in a default Cloudflare Worker proxy URL ─────────────────
+// Deploy the included cloudflare-worker.js, then paste its URL below (e.g.
+// "https://reddit-proxy.yourname.workers.dev"). Every install of this plugin
+// will then automatically fall back to it if a direct Reddit request fails
+// (typically only an issue for people on a VPN). People NOT on a VPN never
+// touch this path at all - direct requests are always tried first.
+// Leave it as "" if you don't want a shared default; people can still set
+// their own in Settings -> Proxy.
+var BAKED_IN_PROXY_URL = "";
+
 function getChannelId(ctx) {
     try { if (ctx && ctx.channel && ctx.channel.id) return ctx.channel.id; } catch(e) {}
     try { if (ctx && ctx.channelId) return ctx.channelId; } catch(e) {}
@@ -48,33 +58,63 @@ var isImage = function(u) { return /\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i.test(u);
 var isVideo = function(u) { return /\.(mp4|webm|gifv|mov)(\?.*)?$/i.test(u); };
 var isAny = function() { return true; };
 
-// Public Reddit JSON endpoint - no OAuth, but Reddit increasingly blocks
-// requests coming from VPN / datacenter IP ranges with a plain 403.
-// There's no reliable code-side fix for that; we just log it and move on
-// to the next source instead of failing the whole command.
-function fetchRedditPublic(sub, filterFn) {
-    var url = "https://www.reddit.com/r/" + sub + "/hot.json?limit=100";
-    return fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
+if (!storage.customSources) storage.customSources = { femboy: [], tomboy: [] };
+if (!storage.customSources.femboy) storage.customSources.femboy = [];
+if (!storage.customSources.tomboy) storage.customSources.tomboy = [];
+if (!storage.enabledPacks) storage.enabledPacks = [];
+if (typeof storage.proxyUrl !== "string") storage.proxyUrl = "";
+
+// Per-device override (Settings -> Proxy) wins if set, otherwise fall back
+// to whatever's baked into the code above. Either way this is ONLY used
+// as a fallback after a direct request already failed - see fetchRedditRaw.
+function effectiveProxyUrl() {
+    if (storage.proxyUrl && storage.proxyUrl.trim()) return storage.proxyUrl.trim();
+    if (BAKED_IN_PROXY_URL && BAKED_IN_PROXY_URL.trim()) return BAKED_IN_PROXY_URL.trim();
+    return "";
+}
+
+// Always tries reddit.com directly first (works fine for most people - the
+// 403 issue is specific to VPN/datacenter IPs). Only retries through the
+// proxy if the direct attempt failed outright or came back non-200.
+function fetchRedditRaw(target) {
+    return fetch(cacheBust(target), { headers: { "User-Agent": REDDIT_UA } })
         .then(function(res) {
-            if (!res.ok) return { url: null, reason: "HTTP " + res.status };
-            return res.json().then(function(json) {
-                var posts = (json && json.data && json.data.children) || [];
-                var candidates = [];
-                for (var i = 0; i < posts.length; i++) {
-                    var d = posts[i] && posts[i].data;
-                    if (!d || !d.url || d.is_video || d.over_18) continue;
-                    if (filterFn(d.url)) candidates.push(d.url);
-                }
-                if (!candidates.length) return { url: null, reason: "no posts" };
-                return { url: candidates[Math.floor(Math.random() * candidates.length)], reason: null };
-            });
-        }).catch(function(err) { return { url: null, reason: err.message || "error" }; });
+            if (res.ok) return { res: res, viaProxy: false };
+            return maybeRetryViaProxy(target);
+        })
+        .catch(function() { return maybeRetryViaProxy(target); });
+}
+
+function maybeRetryViaProxy(target) {
+    var proxy = effectiveProxyUrl();
+    if (!proxy) return fetch(cacheBust(target), { headers: { "User-Agent": REDDIT_UA } }).then(function(res) { return { res: res, viaProxy: false }; });
+    var proxied = proxy.replace(/\/$/, "") + "?url=" + encodeURIComponent(target);
+    return fetch(cacheBust(proxied), { headers: { "User-Agent": REDDIT_UA } }).then(function(res) { return { res: res, viaProxy: true }; });
+}
+
+function fetchRedditPublic(sub, filterFn) {
+    var target = "https://www.reddit.com/r/" + sub + "/hot.json?limit=100";
+    return fetchRedditRaw(target).then(function(wrap) {
+        var res = wrap.res;
+        if (!res.ok) return { url: null, reason: "HTTP " + res.status + (wrap.viaProxy ? " (proxy)" : "") };
+        return res.json().then(function(json) {
+            var posts = (json && json.data && json.data.children) || [];
+            var candidates = [];
+            for (var i = 0; i < posts.length; i++) {
+                var d = posts[i] && posts[i].data;
+                if (!d || !d.url || d.is_video || d.over_18) continue;
+                if (filterFn(d.url)) candidates.push(d.url);
+            }
+            if (!candidates.length) return { url: null, reason: "no posts" };
+            return { url: candidates[Math.floor(Math.random() * candidates.length)], reason: null };
+        });
+    }).catch(function(err) { return { url: null, reason: err.message || "error" }; });
 }
 
 // Generic fetcher for any custom HTTP image-API source the user adds in
-// Settings. Handles plain {url}/{file}/{message}/{src}/{image} shapes AND
-// {results:[{url}]} shapes (e.g. nekos.best) - this was the actual bug
-// that made nekos.best return HTTP 200 but "no url".
+// Settings, or a Pack. Handles plain {url}/{file}/{message}/{src}/{image}
+// shapes AND {results:[{url}]} shapes (e.g. nekos.best). Not routed through
+// the Reddit proxy - it's only allowlisted for reddit.com.
 function fetchGenericSource(src, filterFn) {
     return fetch(cacheBust(src), { headers: { "User-Agent": "RevengeImageBot/1.0" } })
         .then(function(res) {
@@ -92,17 +132,35 @@ function fetchGenericSource(src, filterFn) {
         }).catch(function(err) { return { url: null, reason: err.message || "error" }; });
 }
 
-if (!storage.customSources) storage.customSources = { femboy: [], tomboy: [] };
-if (!storage.customSources.femboy) storage.customSources.femboy = [];
-if (!storage.customSources.tomboy) storage.customSources.tomboy = [];
-
 var DEFAULT_SOURCES = {
     femboy: ["femboymemes", "MildFemboys", "feminineboys"],
     tomboy: ["tomboy", "tomboys"]
 };
 
+// Optional toggle-able bundles, off by default. Kept deliberately small -
+// only includes sources verified to actually return HTTP 200, rather than
+// guessing at subreddit names that might be dead, renamed, or not what
+// they sound like.
+var PRESET_PACKS = [
+    {
+        id: "nekos-anime",
+        label: "Nekos.best (anime filler)",
+        description: "Generic cute anime images, not femboy/tomboy-specific. Useful as bonus variety or as a fallback when Reddit is unreachable.",
+        sources: { femboy: ["https://nekos.best/api/v2/husbando"], tomboy: ["https://nekos.best/api/v2/neko"] }
+    }
+];
+
 function buildSources(type) {
     var out = DEFAULT_SOURCES[type] ? DEFAULT_SOURCES[type].slice() : [];
+    var packs = storage.enabledPacks || [];
+    for (var p = 0; p < packs.length; p++) {
+        for (var pp = 0; pp < PRESET_PACKS.length; pp++) {
+            if (PRESET_PACKS[pp].id === packs[p]) {
+                var s = PRESET_PACKS[pp].sources[type];
+                if (s) for (var si = 0; si < s.length; si++) out.push(s[si]);
+            }
+        }
+    }
     var custom = storage.customSources[type] || [];
     for (var i = 0; i < custom.length; i++) out.push(custom[i]);
     return out;
@@ -162,11 +220,14 @@ function fetchFromSubreddit(sub, kind) {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 exports.settings = function SettingsView() {
+    var tabS = React.useState("sources"); var tab = tabS[0]; var setTab = tabS[1];
     var typS = React.useState("femboy"); var typ = typS[0]; var setTyp = typS[1];
     var inpS = React.useState(""); var inp = inpS[0]; var setInp = inpS[1];
+    var proxS = React.useState(storage.proxyUrl || ""); var proxInp = proxS[0]; var setProxInp = proxS[1];
     var tikS = React.useState(0); var setTik = tikS[1];
     var refresh = function() { setTik(function(t) { return t + 1; }); };
     var custom = storage.customSources[typ] || [];
+    var epacks = storage.enabledPacks || [];
     var e = React.createElement, SV = RN.ScrollView, V = RN.View, T = RN.Text, TI = RN.TextInput, TO = RN.TouchableOpacity;
 
     function Pill(label, active, fn, mr) {
@@ -176,24 +237,58 @@ exports.settings = function SettingsView() {
 
     return e(SV, { style:{flex:1}, contentContainerStyle:{padding:16} },
         e(V, { style:{flexDirection:"row",marginBottom:16} },
-            Pill("Femboy", typ==="femboy", function(){setTyp("femboy");}, 8),
-            Pill("Tomboy", typ==="tomboy", function(){setTyp("tomboy");})
+            Pill("Sources", tab==="sources", function(){setTab("sources");}, 6),
+            Pill("Packs", tab==="packs", function(){setTab("packs");}, 6),
+            Pill("Proxy", tab==="proxy", function(){setTab("proxy");})
         ),
-        e(T, {style:{color:"#aaa",fontSize:12,marginBottom:10}}, "Default subreddits: " + DEFAULT_SOURCES[typ].join(", ")),
-        e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Add a subreddit name OR a full image-API URL"),
-        e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
-            placeholder:"subreddit or https://...", placeholderTextColor:"#555",
-            value:inp, onChangeText:setInp, autoCapitalize:"none", autoCorrect:false }),
-        e(TO, { onPress:function() { var v=inp.trim(); if(!v||custom.indexOf(v)>-1) return; storage.customSources[typ].push(v); setInp(""); refresh(); },
-            style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20} },
-            e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")),
-        e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your custom " + typ + " sources:"),
-        custom.length===0 ? e(T, {style:{color:"#555",fontStyle:"italic"}}, "None yet.") :
-            custom.map(function(src, idx) {
-                return e(V, {key:idx, style:{flexDirection:"row",alignItems:"center",backgroundColor:"#2B2D31",padding:10,borderRadius:8,marginBottom:8}},
-                    e(T, {style:{color:"#ddd",flex:1,marginRight:8}, numberOfLines:1}, src),
-                    e(TO, {onPress:function(){storage.customSources[typ].splice(idx,1);refresh();}}, e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "X")));
+
+        tab==="sources" && e(V, null,
+            e(V, { style:{flexDirection:"row",marginBottom:12} },
+                Pill("Femboy", typ==="femboy", function(){setTyp("femboy");}, 8),
+                Pill("Tomboy", typ==="tomboy", function(){setTyp("tomboy");})
+            ),
+            e(T, {style:{color:"#aaa",fontSize:12,marginBottom:10}}, "Default subreddits: " + DEFAULT_SOURCES[typ].join(", ")),
+            e(T, {style:{color:"#aaa",fontSize:12,marginBottom:8}}, "Add a subreddit name OR a full image-API URL"),
+            e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
+                placeholder:"subreddit or https://...", placeholderTextColor:"#555",
+                value:inp, onChangeText:setInp, autoCapitalize:"none", autoCorrect:false }),
+            e(TO, { onPress:function() { var v=inp.trim(); if(!v||custom.indexOf(v)>-1) return; storage.customSources[typ].push(v); setInp(""); refresh(); },
+                style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center",marginBottom:20} },
+                e(T, {style:{color:"#fff",fontWeight:"bold"}}, "+ Add Source")),
+            e(T, {style:{color:"#fff",fontWeight:"bold",marginBottom:8}}, "Your custom " + typ + " sources:"),
+            custom.length===0 ? e(T, {style:{color:"#555",fontStyle:"italic"}}, "None yet.") :
+                custom.map(function(src, idx) {
+                    return e(V, {key:idx, style:{flexDirection:"row",alignItems:"center",backgroundColor:"#2B2D31",padding:10,borderRadius:8,marginBottom:8}},
+                        e(T, {style:{color:"#ddd",flex:1,marginRight:8}, numberOfLines:1}, src),
+                        e(TO, {onPress:function(){storage.customSources[typ].splice(idx,1);refresh();}}, e(T, {style:{color:"#ff5555",fontWeight:"bold",fontSize:16}}, "X")));
+                }),
+            e(T, {style:{color:"#555",fontSize:11,marginTop:16,fontStyle:"italic"}}, "Note: sources added here only apply on this device. To change defaults for everyone who installs the plugin, edit DEFAULT_SOURCES in index.js on GitHub.")
+        ),
+
+        tab==="packs" && e(V, null,
+            e(T, {style:{color:"#aaa",marginBottom:12,fontSize:13}}, "Optional bonus source bundles. Off by default."),
+            PRESET_PACKS.map(function(pack) {
+                var on = epacks.indexOf(pack.id) > -1;
+                return e(TO, { key:pack.id, onPress:function() { var i=storage.enabledPacks.indexOf(pack.id); if(i>-1) storage.enabledPacks.splice(i,1); else storage.enabledPacks.push(pack.id); refresh(); },
+                    style:{backgroundColor:on? "#1a3a6e" : "#2B2D31",borderRadius:10,padding:14,marginBottom:10,borderWidth:1,borderColor:on? "#5865F2" : "#444"} },
+                    e(V, {style:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"}},
+                        e(T, {style:{color:"#fff",fontWeight:"bold",fontSize:15,flex:1}}, pack.label),
+                        e(T, {style:{fontSize:18}}, on? "✅" : "")),
+                    e(T, {style:{color:"#aaa",fontSize:12,marginTop:4}}, pack.description));
             })
+        ),
+
+        tab==="proxy" && e(V, null,
+            e(T, {style:{color:"#aaa",fontSize:13,marginBottom:10}}, "Reddit is always tried directly first - this only kicks in automatically as a fallback if that fails (common on VPNs). Most people won't need to touch this."),
+            e(T, {style:{color:"#aaa",fontSize:12,marginBottom:10}}, "Plugin-wide default: " + (BAKED_IN_PROXY_URL ? BAKED_IN_PROXY_URL : "(none set by the plugin author)")),
+            e(TI, { style:{backgroundColor:"#1E1F22",color:"#fff",padding:12,borderRadius:8,borderWidth:1,borderColor:"#444",marginBottom:8},
+                placeholder:"override: https://your-worker.workers.dev", placeholderTextColor:"#555",
+                value:proxInp, onChangeText:setProxInp, autoCapitalize:"none", autoCorrect:false }),
+            e(TO, { onPress:function() { storage.proxyUrl = proxInp.trim(); refresh(); },
+                style:{backgroundColor:"#5865F2",padding:12,borderRadius:8,alignItems:"center"} },
+                e(T, {style:{color:"#fff",fontWeight:"bold"}}, "Save Override")),
+            e(T, {style:{color:"#8f8",fontSize:12,marginTop:10}}, "Currently effective: " + (effectiveProxyUrl() || "(direct only, no fallback configured)"))
+        )
     );
 };
 
@@ -213,9 +308,8 @@ exports.onLoad = function() {
             var query = (args && args[0] && args[0].value) || "";
             if (!query) { sendPrivate(cid, "Provide a query"); return; }
             sendPrivate(cid, "Searching Reddit for: " + query);
-            var url = "https://www.reddit.com/subreddits/search.json?q=" + encodeURIComponent(query) + "&limit=10";
-            fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
-                .then(function(res) { return res.json(); })
+            var target = "https://www.reddit.com/subreddits/search.json?q=" + encodeURIComponent(query) + "&limit=10";
+            fetchRedditRaw(target).then(function(wrap) { return wrap.res.json(); })
                 .then(function(json) {
                     var children = (json && json.data && json.data.children) || [];
                     if (!children.length) { sendPrivate(cid, "No subreddits found."); return; }
@@ -240,11 +334,17 @@ exports.onLoad = function() {
             var results = [], completed = 0;
             sources.forEach(function(src) {
                 var label = labelFor(src);
-                var url = src.indexOf("http") === 0 ? src : "https://www.reddit.com/r/" + src + "/hot.json?limit=1";
-                fetch(cacheBust(url), { headers: { "User-Agent": REDDIT_UA } })
-                    .then(function(res) { results.push(label + " (HTTP " + res.status + ")"); })
-                    .catch(function(err) { results.push(label + " (" + err.message + ")"); })
-                    .finally(function() { completed++; if (completed === sources.length) sendPrivate(cid, "Check Complete:\n\n" + results.join("\n")); });
+                if (src.indexOf("http") === 0) {
+                    fetch(cacheBust(src), { method: "GET" })
+                        .then(function(res) { results.push(label + " (HTTP " + res.status + ")"); })
+                        .catch(function(err) { results.push(label + " (" + err.message + ")"); })
+                        .finally(function() { completed++; if (completed === sources.length) sendPrivate(cid, "Check Complete:\n\n" + results.join("\n")); });
+                } else {
+                    fetchRedditRaw("https://www.reddit.com/r/" + src + "/hot.json?limit=1")
+                        .then(function(wrap) { results.push(label + " (HTTP " + wrap.res.status + (wrap.viaProxy ? ", via proxy" : "") + ")"); })
+                        .catch(function(err) { results.push(label + " (" + err.message + ")"); })
+                        .finally(function() { completed++; if (completed === sources.length) sendPrivate(cid, "Check Complete:\n\n" + results.join("\n")); });
+                }
             });
         }
     }));
@@ -328,4 +428,3 @@ exports.onUnload = function() {
 
 return exports;
 })({}, vendetta.patcher, vendetta.metro, vendetta.plugin.storage);
-                
